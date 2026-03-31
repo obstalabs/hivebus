@@ -11,6 +11,7 @@ import (
 // Draft is the workledger-tracked unit created only after a verified diagnosis.
 type Draft struct {
 	TrackingSystem      string           `json:"tracking_system"`
+	WorkledgerProject   string           `json:"workledger_project"`
 	OptionalSyncTargets []string         `json:"optional_sync_targets,omitempty"`
 	Title               string           `json:"title"`
 	Priority            string           `json:"priority"`
@@ -24,7 +25,7 @@ type Draft struct {
 }
 
 // DraftFromThread refuses to generate a WO until the diagnostic thread is structurally ready.
-func DraftFromThread(thread model.Thread, diagnosis model.Diagnosis) (Draft, error) {
+func DraftFromThread(workledgerProject string, thread model.Thread, diagnosis model.Diagnosis) (Draft, error) {
 	if err := thread.Validate(); err != nil {
 		return Draft{}, err
 	}
@@ -45,12 +46,17 @@ func DraftFromThread(thread model.Thread, diagnosis model.Diagnosis) (Draft, err
 		return Draft{}, errors.New("diagnosis still has missing information")
 	}
 
+	if strings.TrimSpace(workledgerProject) == "" {
+		return Draft{}, errors.New("workledger project is required before work-order creation")
+	}
+
 	return Draft{
-		TrackingSystem: "workledger",
-		Title:          "Resolve: " + strings.TrimSpace(thread.Title),
-		Priority:       priorityForTier(thread.CustomerTier),
-		Summary:        buildSummary(thread, diagnosis),
-		Scope:          append([]string(nil), diagnosis.ProposedRemediation...),
+		TrackingSystem:    "workledger",
+		WorkledgerProject: workledgerProject,
+		Title:             "Resolve: " + strings.TrimSpace(thread.Title),
+		Priority:          priorityForTier(thread.CustomerTier),
+		Summary:           buildSummary(thread, diagnosis),
+		Scope:             append([]string(nil), diagnosis.ProposedRemediation...),
 		AcceptanceCriteria: []string{
 			"Original symptom no longer reproduces in the affected environment.",
 			"Evidence from thread " + thread.ThreadID + " is linked to the remediation record.",

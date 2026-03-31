@@ -33,7 +33,7 @@ func TestDraftFromThreadBuildsVerifiedWorkOrder(t *testing.T) {
 		Verified:            true,
 	}
 
-	draft, err := DraftFromThread(thread, diagnosis)
+	draft, err := DraftFromThread("hivebus", thread, diagnosis)
 	if err != nil {
 		t.Fatalf("DraftFromThread() error = %v", err)
 	}
@@ -44,6 +44,10 @@ func TestDraftFromThreadBuildsVerifiedWorkOrder(t *testing.T) {
 
 	if draft.TrackingSystem != "workledger" {
 		t.Fatalf("expected tracking system workledger, got %q", draft.TrackingSystem)
+	}
+
+	if draft.WorkledgerProject != "hivebus" {
+		t.Fatalf("expected workledger project hivebus, got %q", draft.WorkledgerProject)
 	}
 }
 
@@ -71,7 +75,7 @@ func TestDraftFromThreadRejectsUnverifiedDiagnosis(t *testing.T) {
 		Confidence:          model.ConfidenceHigh,
 	}
 
-	if _, err := DraftFromThread(thread, diagnosis); err == nil {
+	if _, err := DraftFromThread("hivebus", thread, diagnosis); err == nil {
 		t.Fatal("DraftFromThread() expected an error")
 	}
 }
@@ -102,7 +106,7 @@ func TestDraftFromThreadRejectsMissingInfo(t *testing.T) {
 		Verified:            true,
 	}
 
-	if _, err := DraftFromThread(thread, diagnosis); err == nil {
+	if _, err := DraftFromThread("hivebus", thread, diagnosis); err == nil {
 		t.Fatal("DraftFromThread() expected an error")
 	}
 }
@@ -132,7 +136,7 @@ func TestDraftFromThreadRejectsThreadThatIsNotReady(t *testing.T) {
 		Verified:            true,
 	}
 
-	if _, err := DraftFromThread(thread, diagnosis); err == nil {
+	if _, err := DraftFromThread("hivebus", thread, diagnosis); err == nil {
 		t.Fatal("DraftFromThread() expected an error")
 	}
 }
@@ -162,12 +166,42 @@ func TestDraftFromThreadAssignsP3ForFreeTier(t *testing.T) {
 		Verified:            true,
 	}
 
-	draft, err := DraftFromThread(thread, diagnosis)
+	draft, err := DraftFromThread("hivebus", thread, diagnosis)
 	if err != nil {
 		t.Fatalf("DraftFromThread() error = %v", err)
 	}
 
 	if draft.Priority != "P3" {
 		t.Fatalf("expected priority P3, got %q", draft.Priority)
+	}
+}
+
+func TestDraftFromThreadRejectsMissingWorkledgerProject(t *testing.T) {
+	t.Helper()
+
+	thread := model.Thread{
+		ThreadID:     "thr_123",
+		Title:        "X is broken",
+		Status:       model.ThreadStatusReadyForWork,
+		CustomerTier: model.TierPro,
+		Source:       "nullbot",
+		Participants: []model.Participant{
+			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
+		},
+		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC),
+	}
+
+	diagnosis := model.Diagnosis{
+		Problem:             "Ingress requests fail with 502 errors during peak load.",
+		LikelyCause:         "The upstream pool is exhausting available Postgres connections.",
+		ProposedRemediation: []string{"Raise the Postgres connection ceiling."},
+		EvidenceIDs:         []string{"art_logs"},
+		Confidence:          model.ConfidenceHigh,
+		Verified:            true,
+	}
+
+	if _, err := DraftFromThread("", thread, diagnosis); err == nil {
+		t.Fatal("DraftFromThread() expected an error")
 	}
 }

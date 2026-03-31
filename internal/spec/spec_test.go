@@ -36,4 +36,16 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 	if document.EditionBoundary.RepoByTier["pro"] != "hivebus-pro" {
 		t.Fatalf("expected pro tier in hivebus-pro, got %q", document.EditionBoundary.RepoByTier["pro"])
 	}
+
+	if len(document.FeatureBoundary.CommunityFeatures) == 0 {
+		t.Fatal("expected community feature boundary")
+	}
+
+	if document.FeatureBoundary.Workledger.ProjectSelection == "" {
+		t.Fatal("expected workledger project selection strategy")
+	}
+
+	if !document.WorkOrderGate["workledger_project_required"] {
+		t.Fatal("expected workledger project gate")
+	}
 }

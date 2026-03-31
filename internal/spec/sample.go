@@ -197,7 +197,7 @@ func SampleCase() CaseBundle {
 		Verified:    true,
 	}
 
-	workOrder, err := work.DraftFromThread(thread, diagnosis)
+	workOrder, err := work.DraftFromThread("hivebus", thread, diagnosis)
 	if err != nil {
 		panic(err)
 	}

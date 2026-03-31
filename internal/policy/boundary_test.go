@@ -35,3 +35,25 @@ func TestRepoForTierReturnsConfiguredRepo(t *testing.T) {
 		t.Fatalf("expected pro repo hivebus-pro, got %q", repo)
 	}
 }
+
+func TestFeaturesExposeCommunityAndPaidSplit(t *testing.T) {
+	t.Helper()
+
+	features := Features()
+
+	if len(features.CommunityFeatures) == 0 {
+		t.Fatal("expected community features")
+	}
+
+	if len(features.PaidOnlyFeatures) == 0 {
+		t.Fatal("expected paid-only features")
+	}
+
+	if features.Workledger.System != "workledger" {
+		t.Fatalf("expected workledger system, got %q", features.Workledger.System)
+	}
+
+	if !features.Workledger.Canonical {
+		t.Fatal("expected workledger to be canonical")
+	}
+}

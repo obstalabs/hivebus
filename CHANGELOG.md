@@ -7,3 +7,4 @@
 - Add edition policy limits and deterministic work-order drafting rules.
 - Add a sample nullbot-to-workledger case bundle for the v0 protocol.
 - Clarify the repo split: free stays in `hivebus`, while non-free tiers live in `hivebus-pro`.
+- Define the community vs paid feature boundary and formalize the canonical workledger integration contract.

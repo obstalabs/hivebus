@@ -18,6 +18,31 @@ The product shape behind this repo is:
 - once the diagnosis is verified, Hivebus drafts a work order for `workledger`, with optional sync to `hiveram.com`.
 - this repo owns the free/core surface; non-free editions live in the separate `hivebus-pro` repo.
 
+## Licensing Model
+
+This repository follows the same model as `neurorouter-free`: it is the maintenance-focused community/core edition of Hivebus.
+
+- this repo keeps the indispensable protocol core public and self-hostable
+- `hivebus-pro` owns paid-only capability
+- new product capability does not land here by default unless a tracked work order explicitly expands the public boundary
+
+## Community Vs Paid
+
+Hivebus only becomes essential if it carries the whole path from issue intake to tracked execution. That means the free/community line is not a crippled toy: it includes the protocol core and the canonical `workledger` bridge. Paid tiers add hosted, commercial, org, and compliance layers on top.
+
+| Capability | Free | Pro | Teams | Enterprise | Repo |
+|------------|------|-----|-------|------------|------|
+| Typed JSON envelopes, threads, receipts, artifacts, and lifecycle state | yes | yes | yes | yes | `hivebus` |
+| Self-hosted bus core and deterministic validation/routing primitives | yes | yes | yes | yes | `hivebus` |
+| Nullbot intake core and clarification loop | yes | yes | yes | yes | `hivebus` |
+| Canonical `workledger` bridge: search, create, update, note, claim, release, context sync | yes | yes | yes | yes | `hivebus` |
+| Optional `hiveram.com` commercial sync | no | yes | yes | yes | `hivebus-pro` |
+| Managed hosted bus/control plane | no | yes | yes | yes | `hivebus-pro` |
+| Shared queues, RBAC, team/org policy packs | no | no | yes | yes | `hivebus-pro` |
+| Enterprise retention, BYOK, regional controls, audit exports | no | no | no | yes | `hivebus-pro` |
+
+This is the separation line: free owns the structured conversation substrate plus canonical execution tracking; paid owns the commercial and organizational layers that sit on top.
+
 ## What This Is NOT
 
 - Not a human chat app with a GUI.
@@ -107,6 +132,21 @@ Hivebus keeps one protocol across all editions. The differences live in policy:
 - `enterprise`: highest limits and long retention for compliance-heavy environments, implemented in `hivebus-pro`.
 
 This keeps the protocol shared while making the repo boundary explicit: free stays open here, non-free stays out of the OSS tree.
+
+## Canonical Workledger Contract
+
+`workledger` is the execution source of truth for Hivebus. A verified diagnosis is not enough on its own; it must be promotable into a canonical work order with an explicit target project.
+
+The free/community contract includes these workledger operations:
+
+- search before create to avoid duplicate work orders
+- create and update the canonical work order
+- add notes with agent findings, evidence, and commit SHAs
+- claim and release work so agents do not execute the same fix twice
+- sync context blobs across machines and operator sessions
+- update project metadata when the bridge needs repo or projection state
+
+`hiveram.com` is optional and commercial. It may mirror or present the same work order, but it does not replace `workledger` as the ledger of record.
 
 ## Known Limitations
 

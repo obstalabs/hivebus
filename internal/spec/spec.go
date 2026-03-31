@@ -14,6 +14,7 @@ type Document struct {
 	ThreadStatuses  []model.ThreadStatus         `json:"thread_statuses"`
 	TierLimits      map[model.Tier]policy.Limits `json:"tier_limits"`
 	EditionBoundary policy.EditionBoundary       `json:"edition_boundary"`
+	FeatureBoundary policy.FeatureBoundary       `json:"feature_boundary"`
 	TrackingSystem  string                       `json:"tracking_system"`
 	OptionalBridge  string                       `json:"optional_bridge,omitempty"`
 	WorkOrderGate   map[string]bool              `json:"work_order_gate"`
@@ -54,11 +55,13 @@ func V0() Document {
 			model.TierEnterprise: policy.LimitsFor(model.TierEnterprise),
 		},
 		EditionBoundary: policy.Boundary(),
+		FeatureBoundary: policy.Features(),
 		TrackingSystem:  "workledger",
 		OptionalBridge:  "hiveram.com",
 		WorkOrderGate: map[string]bool{
 			"verified_diagnosis_required": true,
 			"missing_info_must_be_empty":  true,
+			"workledger_project_required": true,
 		},
 	}
 }
