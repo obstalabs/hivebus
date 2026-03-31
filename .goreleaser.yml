@@ -1,0 +1,50 @@
+version: 2
+
+project_name: hivebus
+
+builds:
+  - main: ./cmd/hivebus/
+    binary: hivebus
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/ppiankov/hivebus/internal/cli.Version={{ trimPrefix .Version "v" }}
+      - -X github.com/ppiankov/hivebus/internal/cli.Commit={{ .ShortCommit }}
+      - -X github.com/ppiankov/hivebus/internal/cli.BuildDate={{ .CommitDate }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - repository:
+      owner: ppiankov
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/ppiankov/hivebus"
+    description: "Secure threaded coordination bus for agents"
+    license: MIT
+    install: |
+      bin.install "hivebus"
+    test: |
+      system "#{bin}/hivebus", "version"
