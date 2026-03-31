@@ -36,6 +36,7 @@ Hivebus only becomes essential if it carries the whole path from issue intake to
 | Self-hosted bus core and deterministic validation/routing primitives | yes | yes | yes | yes | `hivebus` |
 | Nullbot intake core and clarification loop | yes | yes | yes | yes | `hivebus` |
 | Canonical `workledger` bridge: search, create, update, note, claim, release, context sync | yes | yes | yes | yes | `hivebus` |
+| Adaptive Optimization: background analysis, selective hints, escalation to Vectorcourt or human leads | no | yes | yes | yes | `hivebus-pro` |
 | Optional `hiveram.com` commercial sync | no | yes | yes | yes | `hivebus-pro` |
 | Managed hosted bus/control plane | no | yes | yes | yes | `hivebus-pro` |
 | Shared queues, RBAC, team/org policy packs | no | no | yes | yes | `hivebus-pro` |
@@ -147,6 +148,8 @@ The free/community contract includes these workledger operations:
 - update project metadata when the bridge needs repo or projection state
 
 `hiveram.com` is optional and commercial. It may mirror or present the same work order, but it does not replace `workledger` as the ledger of record.
+
+Adaptive Optimization is also paid-only. It is the background intelligence layer that analyzes privacy-safe pattern events, produces selective evidence-backed hints, and can escalate to Vectorcourt or human leads when the operator opts in.
 
 ## Known Limitations
 

@@ -113,9 +113,9 @@ func Features() FeatureBoundary {
 				IncludedTiers: paidTiers,
 			},
 			{
-				ID:            "premium-routing-and-escalation",
-				Name:          "Premium routing and escalation",
-				Description:   "Economic dispatch, deadline escalation, and premium expert-agent orchestration policies.",
+				ID:            "adaptive-optimization",
+				Name:          "Adaptive Optimization",
+				Description:   "Privacy-safe background analysis, selective hints, and escalation from structured agent-usage patterns.",
 				Repo:          "hivebus-pro",
 				IncludedTiers: paidTiers,
 			},
