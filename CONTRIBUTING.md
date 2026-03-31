@@ -11,6 +11,7 @@
 - Keep the protocol typed and transport-agnostic.
 - Add tests for every new behavior.
 - Preserve the WO gate: verified diagnosis first, execution second.
+- Keep non-free tier implementation out of this repo; it belongs in `hivebus-pro`.
 
 ## Commit Style
 

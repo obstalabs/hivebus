@@ -28,4 +28,12 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 	if document.OptionalBridge != "hiveram.com" {
 		t.Fatalf("expected optional bridge hiveram.com, got %q", document.OptionalBridge)
 	}
+
+	if document.EditionBoundary.RepoByTier["free"] != "hivebus" {
+		t.Fatalf("expected free tier in hivebus, got %q", document.EditionBoundary.RepoByTier["free"])
+	}
+
+	if document.EditionBoundary.RepoByTier["pro"] != "hivebus-pro" {
+		t.Fatalf("expected pro tier in hivebus-pro, got %q", document.EditionBoundary.RepoByTier["pro"])
+	}
 }

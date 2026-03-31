@@ -16,6 +16,7 @@ The product shape behind this repo is:
 - specialist agents investigate asynchronously inside the same thread.
 - Hivebus preserves receipts, context, and auditability as JSON-first protocol objects.
 - once the diagnosis is verified, Hivebus drafts a work order for `workledger`, with optional sync to `hiveram.com`.
+- this repo owns the free/core surface; non-free editions live in the separate `hivebus-pro` repo.
 
 ## What This Is NOT
 
@@ -100,10 +101,12 @@ Current code layout:
 
 Hivebus keeps one protocol across all editions. The differences live in policy:
 
-- `free`: smallest retention window and artifact limits for solo experiments.
-- `pro`: more room for production debugging and longer thread retention.
-- `teams`: larger routing fan-out and evidence bundles for shared operations.
-- `enterprise`: highest limits and long retention for compliance-heavy environments.
+- `free`: smallest retention window and artifact limits for solo experiments, implemented in this `hivebus` repo.
+- `pro`: more room for production debugging and longer thread retention, implemented in `hivebus-pro`.
+- `teams`: larger routing fan-out and evidence bundles for shared operations, implemented in `hivebus-pro`.
+- `enterprise`: highest limits and long retention for compliance-heavy environments, implemented in `hivebus-pro`.
+
+This keeps the protocol shared while making the repo boundary explicit: free stays open here, non-free stays out of the OSS tree.
 
 ## Known Limitations
 
@@ -118,6 +121,7 @@ Hivebus keeps one protocol across all editions. The differences live in policy:
 - Add signed envelope verification and nonce replay protection.
 - Add nullbot intake adapters and follow-up question exchange.
 - Add workledger persistence and optional Hiveram sync.
+- Keep non-free runtime surfaces in `hivebus-pro` instead of mixing them into this repo.
 - Add queue-backed and realtime transports without changing protocol shape.
 
 ## License
