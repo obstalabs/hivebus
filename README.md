@@ -15,7 +15,7 @@ The product shape behind this repo is:
 - `nullbot` runs close to the problem, gathers safe evidence, and opens a thread.
 - specialist agents investigate asynchronously inside the same thread.
 - Hivebus preserves receipts, context, and auditability as JSON-first protocol objects.
-- once the diagnosis is verified, Hivebus drafts a work order for `workledger`, with optional sync to `hiveram.com`.
+- once the diagnosis is verified, Hivebus drafts a work order for `workledger`, with optional execution integration to `hiveram.com`.
 - this repo owns the free/core surface; non-free editions live in the separate `hivebus-pro` repo.
 
 ## Licensing Model
@@ -37,7 +37,7 @@ Hivebus only becomes essential if it carries the whole path from issue intake to
 | Nullbot intake core and clarification loop | yes | yes | yes | yes | `hivebus` |
 | Canonical `workledger` bridge: search, create, update, note, claim, release, context sync | yes | yes | yes | yes | `hivebus` |
 | Adaptive Optimization: background analysis, selective hints, escalation to Vectorcourt or human leads | no | yes | yes | yes | `hivebus-pro` |
-| Optional `hiveram.com` commercial sync | no | yes | yes | yes | `hivebus-pro` |
+| Optional `hiveram.com` execution integration | no | yes | yes | yes | `hivebus-pro` |
 | Managed hosted bus/control plane | no | yes | yes | yes | `hivebus-pro` |
 | Shared queues, RBAC, team/org policy packs | no | no | yes | yes | `hivebus-pro` |
 | Enterprise retention, BYOK, regional controls, audit exports | no | no | no | yes | `hivebus-pro` |
@@ -66,6 +66,7 @@ Hivebus follows RootOps principles:
 
 ```bash
 make build
+./bin/hivebus serve --db /tmp/hivebus.db
 ./bin/hivebus spec
 ./bin/hivebus sample-case
 make test
@@ -91,6 +92,12 @@ Show build metadata:
 ./bin/hivebus version --json
 ```
 
+Run the v0 HTTP runtime with a SQLite append-only event log:
+
+```bash
+./bin/hivebus serve --listen 127.0.0.1:7081 --db /tmp/hivebus.db
+```
+
 ## Architecture
 
 ```text
@@ -100,7 +107,7 @@ nullbot collector
 
 Hivebus core
   -> validates envelope structure and tier policy
-  -> preserves thread state, provenance, and artifacts
+  -> preserves thread state in an append-only SQLite event log
   -> routes investigation work across specialist agents
 
 investigator agents
@@ -111,17 +118,19 @@ workledger bridge
   -> accepts only verified diagnoses
   -> creates the canonical work order that can fully resolve the user story
 
-optional hiveram.com sync
-  -> mirrors the same work order for commercial workflows when needed
+optional hiveram.com execution integration
+  -> mirrors or extends the same work order for commercial workflows when needed
 ```
 
 Current code layout:
 
 - `cmd/hivebus`: minimal CLI entrypoint
 - `internal/model`: envelopes, threads, artifacts, diagnoses
+- `internal/runtime`: v0 HTTP handlers for thread creation, append, and replay
 - `internal/policy`: free, pro, teams, enterprise limits
 - `internal/spec`: exported v0 contract and sample case bundle
-- `internal/work`: deterministic workledger drafting rules with optional Hiveram sync targets
+- `internal/store`: SQLite append-only event log and deterministic replay
+- `internal/work`: deterministic workledger drafting rules with optional Hiveram execution targets
 
 ## Editions
 
@@ -153,17 +162,17 @@ Adaptive Optimization is also paid-only. It is the background intelligence layer
 
 ## Known Limitations
 
-- This repo models the protocol and work-order gate, not the network transport yet.
+- The v0 runtime is HTTP-only and intentionally small: create thread, append envelope, replay thread.
 - Envelope signatures are represented structurally but not cryptographically verified yet.
-- There is no append-only store, replay engine, or runtime workledger/Hiveram bridge in this first cut.
+- The runtime does not yet persist verified diagnoses into `workledger` or hand execution off to `hiveram`.
 - Capability routing is still declarative rather than runtime-driven.
+- There is no operator or worker auth on the runtime yet.
 
 ## Roadmap
 
-- Add append-only thread storage and deterministic replay.
 - Add signed envelope verification and nonce replay protection.
 - Add nullbot intake adapters and follow-up question exchange.
-- Add workledger persistence and optional Hiveram sync.
+- Add workledger persistence and optional Hiveram execution integration.
 - Keep non-free runtime surfaces in `hivebus-pro` instead of mixing them into this repo.
 - Add queue-backed and realtime transports without changing protocol shape.
 
