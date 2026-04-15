@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1] - 2026-04-15
+
+- Add `hivebus serve` as the first runnable v0 HTTP runtime.
+- Persist thread events in an append-only SQLite log with deterministic replay.
+- Expose thread create, append, replay, and health endpoints for local smoke use.
+- Document the new runtime surface and update wording around optional Hiveram execution integration.
+
 ## [0.1.0] - 2026-03-31
 
 - Scaffold Hivebus as a Go project with CLI, CI, release config, and documentation.
