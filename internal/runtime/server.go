@@ -30,6 +30,8 @@ func NewHandler(st *store.Store, keys *KeyStore) http.Handler {
 	srv := &server{store: st}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", srv.handleHealthz)
+	mux.HandleFunc("POST /v0/dispatch", withAuth(keys, RoleOperator, srv.handleDispatch))
+	mux.HandleFunc("GET /v0/dispatch/{threadID}/resume", withAuth(keys, RoleOperator, srv.handleDispatchResume))
 	mux.HandleFunc("POST /v0/threads", withAuth(keys, RoleOperator, srv.handleCreateThread))
 	mux.HandleFunc("GET /v0/threads/{threadID}", withAuth(keys, RoleOperator, srv.handleGetThread))
 	mux.HandleFunc("POST /v0/threads/{threadID}/messages", withAuth(keys, RoleOperator, srv.handleAppendEnvelope))
