@@ -152,3 +152,57 @@ func (a Artifact) Validate() error {
 
 	return nil
 }
+
+// ValidateTaskRequest applies runtime checks for a claimable task envelope.
+func (e Envelope) ValidateTaskRequest() error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	if e.Type != MessageTypeTaskRequest {
+		return fmt.Errorf("expected %q, got %q", MessageTypeTaskRequest, e.Type)
+	}
+
+	return nil
+}
+
+// ValidateTaskAccepted applies runtime checks for a task.accepted envelope.
+func (e Envelope) ValidateTaskAccepted(request Envelope) error {
+	if err := request.ValidateTaskRequest(); err != nil {
+		return fmt.Errorf("invalid request envelope: %w", err)
+	}
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	if e.Type != MessageTypeTaskAccepted {
+		return fmt.Errorf("expected %q, got %q", MessageTypeTaskAccepted, e.Type)
+	}
+	if e.ThreadID != request.ThreadID {
+		return errors.New("task.accepted thread_id must match request thread_id")
+	}
+	if strings.TrimSpace(e.ReplyTo) != request.MessageID {
+		return errors.New("task.accepted reply_to must match request message_id")
+	}
+
+	return nil
+}
+
+// ValidateTaskResultFinal applies runtime checks for a task.result.final envelope.
+func (e Envelope) ValidateTaskResultFinal(request Envelope) error {
+	if err := request.ValidateTaskRequest(); err != nil {
+		return fmt.Errorf("invalid request envelope: %w", err)
+	}
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	if e.Type != MessageTypeTaskResultFinal {
+		return fmt.Errorf("expected %q, got %q", MessageTypeTaskResultFinal, e.Type)
+	}
+	if e.ThreadID != request.ThreadID {
+		return errors.New("task.result.final thread_id must match request thread_id")
+	}
+	if strings.TrimSpace(e.ReplyTo) != request.MessageID {
+		return errors.New("task.result.final reply_to must match request message_id")
+	}
+
+	return nil
+}

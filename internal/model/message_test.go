@@ -237,3 +237,117 @@ func TestArtifactValidateRejectsMissingRequiredFields(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateTaskRequestAcceptsRuntimeEnvelope(t *testing.T) {
+	t.Helper()
+
+	request := Envelope{
+		MessageID:      "msg_123",
+		ThreadID:       "thr_9",
+		From:           "collector.nullbot",
+		To:             []string{"agent.investigator"},
+		Type:           MessageTypeTaskRequest,
+		Payload:        json.RawMessage(`{"issue":"db down"}`),
+		SentAt:         time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+		IdempotencyKey: "idem_123",
+		Trace: Trace{
+			CorrelationID: "corr_123",
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_123",
+		},
+	}
+
+	if err := request.ValidateTaskRequest(); err != nil {
+		t.Fatalf("ValidateTaskRequest() error = %v", err)
+	}
+}
+
+func TestValidateTaskAcceptedRejectsWrongReplyTarget(t *testing.T) {
+	t.Helper()
+
+	request := Envelope{
+		MessageID:      "msg_123",
+		ThreadID:       "thr_9",
+		From:           "collector.nullbot",
+		To:             []string{"agent.investigator"},
+		Type:           MessageTypeTaskRequest,
+		Payload:        json.RawMessage(`{"issue":"db down"}`),
+		SentAt:         time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+		IdempotencyKey: "idem_123",
+		Trace: Trace{
+			CorrelationID: "corr_123",
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_123",
+		},
+	}
+	accepted := Envelope{
+		MessageID:      "msg_accepted",
+		ThreadID:       request.ThreadID,
+		From:           "worker.smokevm",
+		To:             []string{request.From},
+		Type:           MessageTypeTaskAccepted,
+		Payload:        json.RawMessage(`{"status":"accepted"}`),
+		ReplyTo:        "msg_other",
+		SentAt:         request.SentAt.Add(1 * time.Minute),
+		IdempotencyKey: "idem_accepted",
+		Trace: Trace{
+			CorrelationID: request.Trace.CorrelationID,
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_accepted",
+		},
+	}
+
+	if err := accepted.ValidateTaskAccepted(request); err == nil {
+		t.Fatal("ValidateTaskAccepted() expected an error")
+	}
+}
+
+func TestValidateTaskResultFinalAcceptsMatchingRequest(t *testing.T) {
+	t.Helper()
+
+	request := Envelope{
+		MessageID:      "msg_123",
+		ThreadID:       "thr_9",
+		From:           "collector.nullbot",
+		To:             []string{"agent.investigator"},
+		Type:           MessageTypeTaskRequest,
+		Payload:        json.RawMessage(`{"issue":"db down"}`),
+		SentAt:         time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+		IdempotencyKey: "idem_123",
+		Trace: Trace{
+			CorrelationID: "corr_123",
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_123",
+		},
+	}
+	result := Envelope{
+		MessageID:      "msg_result",
+		ThreadID:       request.ThreadID,
+		From:           "worker.smokevm",
+		To:             []string{request.From},
+		Type:           MessageTypeTaskResultFinal,
+		Payload:        json.RawMessage(`{"status":"done"}`),
+		ReplyTo:        request.MessageID,
+		SentAt:         request.SentAt.Add(2 * time.Minute),
+		IdempotencyKey: "idem_result",
+		Trace: Trace{
+			CorrelationID: request.Trace.CorrelationID,
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_result",
+		},
+	}
+
+	if err := result.ValidateTaskResultFinal(request); err != nil {
+		t.Fatalf("ValidateTaskResultFinal() error = %v", err)
+	}
+}

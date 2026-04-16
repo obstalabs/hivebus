@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ppiankov/hivebus/internal/model"
 	"github.com/ppiankov/hivebus/internal/store"
@@ -25,13 +26,17 @@ type server struct {
 	store *store.Store
 }
 
-func NewHandler(st *store.Store) http.Handler {
+func NewHandler(st *store.Store, keys *KeyStore) http.Handler {
 	srv := &server{store: st}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", srv.handleHealthz)
-	mux.HandleFunc("POST /v0/threads", srv.handleCreateThread)
-	mux.HandleFunc("GET /v0/threads/{threadID}", srv.handleGetThread)
-	mux.HandleFunc("POST /v0/threads/{threadID}/messages", srv.handleAppendEnvelope)
+	mux.HandleFunc("POST /v0/threads", withAuth(keys, RoleOperator, srv.handleCreateThread))
+	mux.HandleFunc("GET /v0/threads/{threadID}", withAuth(keys, RoleOperator, srv.handleGetThread))
+	mux.HandleFunc("POST /v0/threads/{threadID}/messages", withAuth(keys, RoleOperator, srv.handleAppendEnvelope))
+	mux.HandleFunc("POST /v0/workers/poll", withAuth(keys, RoleWorker, srv.handleWorkerPoll))
+	mux.HandleFunc("POST /v0/workers/claim", withAuth(keys, RoleWorker, srv.handleWorkerClaim))
+	mux.HandleFunc("POST /v0/workers/leases/{leaseID}/renew", withAuth(keys, RoleWorker, srv.handleLeaseRenew))
+	mux.HandleFunc("POST /v0/workers/leases/{leaseID}/complete", withAuth(keys, RoleWorker, srv.handleLeaseComplete))
 
 	return mux
 }
@@ -142,9 +147,12 @@ func isInputError(err error) bool {
 
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "required") ||
+		strings.Contains(lower, "expected") ||
 		strings.Contains(lower, "unsupported") ||
 		strings.Contains(lower, "duplicate") ||
 		strings.Contains(lower, "deadline must") ||
+		strings.Contains(lower, "must match") ||
+		strings.Contains(lower, "must be positive") ||
 		strings.Contains(lower, "transition") ||
 		strings.Contains(lower, "invalid")
 }
@@ -160,4 +168,8 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	_ = encoder.Encode(value)
+}
+
+func currentTime() time.Time {
+	return time.Now().UTC()
 }

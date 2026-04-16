@@ -17,7 +17,7 @@ func TestThreadLifecycleOverHTTP(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st)
+	handler := NewHandler(st, nil)
 
 	thread := sampleThread()
 	threadBody, err := json.Marshal(thread)
@@ -78,7 +78,7 @@ func TestAppendEnvelopeRejectsThreadPathMismatch(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st)
+	handler := NewHandler(st, nil)
 
 	thread := sampleThread()
 	mustSeedThread(t, st, thread)
@@ -107,7 +107,7 @@ func TestHealthzReportsStoreAvailability(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st)
+	handler := NewHandler(st, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()

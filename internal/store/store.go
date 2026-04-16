@@ -33,8 +33,9 @@ type Store struct {
 }
 
 type ThreadSnapshot struct {
-	Thread    model.Thread     `json:"thread"`
-	Envelopes []model.Envelope `json:"envelopes"`
+	Thread        model.Thread     `json:"thread"`
+	Envelopes     []model.Envelope `json:"envelopes"`
+	LeaseReceipts []LeaseReceipt   `json:"lease_receipts,omitempty"`
 }
 
 func Open(path string) (*Store, error) {
@@ -220,6 +221,15 @@ func (s *Store) LoadThread(ctx context.Context, threadID string) (ThreadSnapshot
 				return ThreadSnapshot{}, errors.New("envelope thread_id does not match replay target")
 			}
 			snapshot.Envelopes = append(snapshot.Envelopes, envelope)
+		case eventKindWorkerLease:
+			var receipt LeaseReceipt
+			if err := json.Unmarshal(payload, &receipt); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("unmarshal lease receipt event: %w", err)
+			}
+			if receipt.ThreadID != threadID {
+				return ThreadSnapshot{}, errors.New("lease receipt thread_id does not match replay target")
+			}
+			snapshot.LeaseReceipts = append(snapshot.LeaseReceipts, receipt)
 		default:
 			return ThreadSnapshot{}, fmt.Errorf("unsupported event kind %q", eventKind)
 		}
@@ -258,6 +268,27 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''`,
 		`CREATE INDEX IF NOT EXISTS thread_events_thread_sequence_idx
 			ON thread_events(thread_id, sequence)`,
+		`CREATE TABLE IF NOT EXISTS worker_leases (
+			lease_id TEXT PRIMARY KEY,
+			thread_id TEXT NOT NULL,
+			task_message_id TEXT NOT NULL,
+			accepted_message_id TEXT NOT NULL,
+			worker_id TEXT NOT NULL,
+			claimed_at TEXT NOT NULL,
+			leased_until TEXT NOT NULL,
+			status TEXT NOT NULL,
+			result_message_id TEXT,
+			completed_at TEXT
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS worker_leases_active_task_unique
+			ON worker_leases(task_message_id)
+			WHERE status = 'active'`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS worker_leases_active_worker_unique
+			ON worker_leases(worker_id)
+			WHERE status = 'active'`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS worker_leases_completed_task_unique
+			ON worker_leases(task_message_id)
+			WHERE status = 'completed'`,
 	}
 
 	for _, statement := range statements {
