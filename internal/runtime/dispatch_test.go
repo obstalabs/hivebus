@@ -76,6 +76,106 @@ func TestDispatchCreatesClaimableTaskForTargetWorker(t *testing.T) {
 	}
 }
 
+func TestDispatchSignalCreatesStructuredIntentAndClaimableTask(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, keys)
+
+	dispatchBody := marshalJSON(t, dispatchRequest{
+		Signal: "[hivebus] worker.smokevm do smoke testing for new release of neurorouter",
+		Sender: dispatchSender{
+			ID:        "codex.operator",
+			SessionID: "sess_signal",
+		},
+	})
+	dispatchReq := httptest.NewRequest(http.MethodPost, "/v0/dispatch", bytes.NewReader(dispatchBody))
+	dispatchReq.Header.Set("Content-Type", "application/json")
+	dispatchReq.Header.Set("Authorization", "Bearer operator-secret")
+	dispatchRec := httptest.NewRecorder()
+	handler.ServeHTTP(dispatchRec, dispatchReq)
+	if dispatchRec.Code != http.StatusCreated {
+		t.Fatalf("POST /v0/dispatch status = %d, body = %s", dispatchRec.Code, dispatchRec.Body.String())
+	}
+
+	var dispatchResp dispatchResponse
+	if err := json.Unmarshal(dispatchRec.Body.Bytes(), &dispatchResp); err != nil {
+		t.Fatalf("Unmarshal(dispatch) error = %v", err)
+	}
+	if dispatchResp.Intent == nil {
+		t.Fatalf("expected parsed intent, got %#v", dispatchResp)
+	}
+	if dispatchResp.Intent.Target != "worker.smokevm" || dispatchResp.Intent.Intent != "test" {
+		t.Fatalf("unexpected parsed intent %#v", dispatchResp.Intent)
+	}
+	if dispatchResp.Intent.Scope != "neurorouter" || dispatchResp.Intent.Priority != "normal" {
+		t.Fatalf("unexpected parsed scope/priority %#v", dispatchResp.Intent)
+	}
+
+	pollBody := marshalJSON(t, workerPollRequest{WorkerID: "worker.smokevm"})
+	pollReq := httptest.NewRequest(http.MethodPost, "/v0/workers/poll", bytes.NewReader(pollBody))
+	pollReq.Header.Set("Content-Type", "application/json")
+	pollReq.Header.Set("Authorization", "Bearer worker-secret")
+	pollRec := httptest.NewRecorder()
+	handler.ServeHTTP(pollRec, pollReq)
+	if pollRec.Code != http.StatusOK {
+		t.Fatalf("POST /v0/workers/poll status = %d, body = %s", pollRec.Code, pollRec.Body.String())
+	}
+
+	var pollResp workerPollResponse
+	if err := json.Unmarshal(pollRec.Body.Bytes(), &pollResp); err != nil {
+		t.Fatalf("Unmarshal(poll) error = %v", err)
+	}
+	if pollResp.Status != "available" || pollResp.Task == nil {
+		t.Fatalf("unexpected poll response %#v", pollResp)
+	}
+	if pollResp.Task.Envelope.MessageID != dispatchResp.TaskMessageID {
+		t.Fatalf("expected dispatched task %q, got %#v", dispatchResp.TaskMessageID, pollResp.Task)
+	}
+}
+
+func TestDispatchSignalParsesExtendedForm(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, keys)
+
+	dispatchBody := marshalJSON(t, dispatchRequest{
+		Signal: "[hivebus] worker.reviewer | review the changes in obstalabs-site and suggest improvements | repo=obstalabs-site | priority=high, timeout=10m",
+		Sender: dispatchSender{
+			ID:        "claude.operator",
+			SessionID: "sess_extended",
+		},
+	})
+	dispatchReq := httptest.NewRequest(http.MethodPost, "/v0/dispatch", bytes.NewReader(dispatchBody))
+	dispatchReq.Header.Set("Content-Type", "application/json")
+	dispatchReq.Header.Set("Authorization", "Bearer operator-secret")
+	dispatchRec := httptest.NewRecorder()
+	handler.ServeHTTP(dispatchRec, dispatchReq)
+	if dispatchRec.Code != http.StatusCreated {
+		t.Fatalf("POST /v0/dispatch status = %d, body = %s", dispatchRec.Code, dispatchRec.Body.String())
+	}
+
+	var dispatchResp dispatchResponse
+	if err := json.Unmarshal(dispatchRec.Body.Bytes(), &dispatchResp); err != nil {
+		t.Fatalf("Unmarshal(dispatch) error = %v", err)
+	}
+	if dispatchResp.Intent == nil {
+		t.Fatalf("expected parsed intent, got %#v", dispatchResp)
+	}
+	if dispatchResp.Intent.Format != "extended" || dispatchResp.Intent.Intent != "review" {
+		t.Fatalf("unexpected parsed intent %#v", dispatchResp.Intent)
+	}
+	if dispatchResp.Intent.Scope != "obstalabs-site" || dispatchResp.Intent.Priority != "high" {
+		t.Fatalf("unexpected parsed scope/priority %#v", dispatchResp.Intent)
+	}
+	if len(dispatchResp.Intent.Constraints) != 2 {
+		t.Fatalf("expected parsed constraints, got %#v", dispatchResp.Intent)
+	}
+}
+
 func TestDispatchCreatesClaimableTaskForCapabilityWorker(t *testing.T) {
 	t.Helper()
 
@@ -153,6 +253,55 @@ func TestDispatchRejectsAmbiguousTargeting(t *testing.T) {
 	}
 }
 
+func TestDispatchSignalRejectsMixedMode(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, keys)
+
+	dispatchBody := marshalJSON(t, dispatchRequest{
+		Signal: "[hivebus] worker.smokevm run smoke tests",
+		Task:   "override me",
+		Sender: dispatchSender{
+			ID:        "codex.operator",
+			SessionID: "sess_mixed",
+		},
+	})
+	dispatchReq := httptest.NewRequest(http.MethodPost, "/v0/dispatch", bytes.NewReader(dispatchBody))
+	dispatchReq.Header.Set("Content-Type", "application/json")
+	dispatchReq.Header.Set("Authorization", "Bearer operator-secret")
+	dispatchRec := httptest.NewRecorder()
+	handler.ServeHTTP(dispatchRec, dispatchReq)
+	if dispatchRec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /v0/dispatch status = %d, body = %s", dispatchRec.Code, dispatchRec.Body.String())
+	}
+}
+
+func TestDispatchSignalRejectsUnsupportedSchedulerAlias(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, keys)
+
+	dispatchBody := marshalJSON(t, dispatchRequest{
+		Signal: "[hivebus] @best fix failing tests",
+		Sender: dispatchSender{
+			ID:        "codex.operator",
+			SessionID: "sess_best",
+		},
+	})
+	dispatchReq := httptest.NewRequest(http.MethodPost, "/v0/dispatch", bytes.NewReader(dispatchBody))
+	dispatchReq.Header.Set("Content-Type", "application/json")
+	dispatchReq.Header.Set("Authorization", "Bearer operator-secret")
+	dispatchRec := httptest.NewRecorder()
+	handler.ServeHTTP(dispatchRec, dispatchReq)
+	if dispatchRec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /v0/dispatch status = %d, body = %s", dispatchRec.Code, dispatchRec.Body.String())
+	}
+}
+
 func TestDispatchResumeCapsuleForQueuedTask(t *testing.T) {
 	t.Helper()
 
@@ -198,6 +347,38 @@ func TestDispatchResumeCapsuleForQueuedTask(t *testing.T) {
 	}
 	if capsule.SenderSessionID != "sess_resume" {
 		t.Fatalf("expected sender session id, got %#v", capsule)
+	}
+}
+
+func TestDispatchResumeCapsuleIncludesStructuredIntent(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, keys)
+
+	threadID := mustDispatchTask(t, handler, dispatchRequest{
+		Signal: "[hivebus] worker.smokevm do smoke testing for new release of neurorouter",
+		Sender: dispatchSender{
+			ID:        "claude.operator",
+			SessionID: "sess_resume_signal",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v0/dispatch/"+threadID+"/resume", nil)
+	req.Header.Set("Authorization", "Bearer operator-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /v0/dispatch/{id}/resume status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var capsule resumeCapsule
+	if err := json.Unmarshal(rec.Body.Bytes(), &capsule); err != nil {
+		t.Fatalf("Unmarshal(capsule) error = %v", err)
+	}
+	if capsule.Intent == nil || capsule.Intent.Intent != "test" || capsule.Intent.Scope != "neurorouter" {
+		t.Fatalf("expected structured intent in resume capsule, got %#v", capsule)
 	}
 }
 
