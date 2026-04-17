@@ -17,8 +17,8 @@ func TestDraftFromThreadBuildsVerifiedWorkOrder(t *testing.T) {
 		CustomerTier: model.TierTeams,
 		Source:       "nullbot",
 		Participants: []model.Participant{
-			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
-			{ID: "agent.investigator", Kind: model.ParticipantAgent},
+			testCollectorParticipant(),
+			testAgentParticipant("agent.investigator"),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC),
@@ -61,7 +61,7 @@ func TestDraftFromThreadRejectsUnverifiedDiagnosis(t *testing.T) {
 		CustomerTier: model.TierPro,
 		Source:       "nullbot",
 		Participants: []model.Participant{
-			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC),
@@ -90,7 +90,7 @@ func TestDraftFromThreadRejectsMissingInfo(t *testing.T) {
 		CustomerTier: model.TierFree,
 		Source:       "nullbot",
 		Participants: []model.Participant{
-			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC),
@@ -121,7 +121,7 @@ func TestDraftFromThreadRejectsThreadThatIsNotReady(t *testing.T) {
 		CustomerTier: model.TierFree,
 		Source:       "nullbot",
 		Participants: []model.Participant{
-			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC),
@@ -151,7 +151,7 @@ func TestDraftFromThreadAssignsP3ForFreeTier(t *testing.T) {
 		CustomerTier: model.TierFree,
 		Source:       "nullbot",
 		Participants: []model.Participant{
-			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC),
@@ -186,7 +186,7 @@ func TestDraftFromThreadRejectsMissingWorkledgerProject(t *testing.T) {
 		CustomerTier: model.TierPro,
 		Source:       "nullbot",
 		Participants: []model.Participant{
-			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC),
@@ -203,5 +203,31 @@ func TestDraftFromThreadRejectsMissingWorkledgerProject(t *testing.T) {
 
 	if _, err := DraftFromThread("", thread, diagnosis); err == nil {
 		t.Fatal("DraftFromThread() expected an error")
+	}
+}
+
+func testCollectorParticipant() model.Participant {
+	return model.Participant{
+		ID:          "collector.nullbot",
+		Type:        model.ParticipantTypeService,
+		Kind:        model.ParticipantCollector,
+		DisplayName: "Nullbot Collector",
+		Visibility:  model.ParticipantVisibilityThread,
+		Service: &model.ServiceParticipant{
+			ServiceName: "nullbot",
+		},
+	}
+}
+
+func testAgentParticipant(id string) model.Participant {
+	return model.Participant{
+		ID:          id,
+		Type:        model.ParticipantTypeAgent,
+		Kind:        model.ParticipantAgent,
+		DisplayName: "Investigator Agent",
+		Visibility:  model.ParticipantVisibilityThread,
+		Agent: &model.AgentParticipant{
+			AgentID: id,
+		},
 	}
 }

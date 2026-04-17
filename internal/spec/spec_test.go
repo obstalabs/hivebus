@@ -58,6 +58,38 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 		t.Fatal("expected workledger project gate")
 	}
 
+	if len(document.Participants.Types) != 3 {
+		t.Fatalf("expected 3 participant types, got %d", len(document.Participants.Types))
+	}
+
+	if len(document.Participants.SharedFields) == 0 {
+		t.Fatal("expected participant shared fields")
+	}
+
+	if len(document.Participants.TypeSpecificFields["human"]) == 0 {
+		t.Fatal("expected human participant fields")
+	}
+
+	if len(document.Participants.TypeSpecificFields["agent"]) == 0 {
+		t.Fatal("expected agent participant fields")
+	}
+
+	if len(document.Participants.TypeSpecificFields["service"]) == 0 {
+		t.Fatal("expected service participant fields")
+	}
+
+	if len(document.Participants.MembershipRules["human"]) == 0 {
+		t.Fatal("expected human membership rules")
+	}
+
+	if len(document.Participants.VisibilityRules["service"]) == 0 {
+		t.Fatal("expected service visibility rules")
+	}
+
+	if len(document.Participants.AuthorizationRules["agent"]) == 0 {
+		t.Fatal("expected agent authorization rules")
+	}
+
 	if len(document.Authorization.RequiredFields) == 0 {
 		t.Fatal("expected authorization required fields")
 	}
@@ -255,5 +287,34 @@ func TestSampleClarificationLifecycleValidatesAllEvents(t *testing.T) {
 		default:
 			t.Fatalf("unexpected message type %s", envelope.Type)
 		}
+	}
+}
+
+func TestSampleParticipantModelValidatesAllEvents(t *testing.T) {
+	t.Helper()
+
+	sample := SampleParticipantModel()
+	if len(sample.Messages) != 3 {
+		t.Fatalf("expected 3 participant model messages, got %d", len(sample.Messages))
+	}
+
+	if err := sample.Thread.Validate(); err != nil {
+		t.Fatalf("Thread.Validate() error = %v", err)
+	}
+
+	if sample.Messages[0].From != "human.operator" || sample.Messages[0].To[0] != "human.reporter" {
+		t.Fatalf("expected human-to-human traffic, got from=%q to=%#v", sample.Messages[0].From, sample.Messages[0].To)
+	}
+
+	if err := sample.Messages[0].ValidateTaskRequest(); err != nil {
+		t.Fatalf("ValidateTaskRequest(human-human) error = %v", err)
+	}
+
+	if err := sample.Messages[1].ValidateTaskResultFinal(sample.Messages[0]); err != nil {
+		t.Fatalf("ValidateTaskResultFinal(human-human) error = %v", err)
+	}
+
+	if err := sample.Messages[2].ValidateTaskRequest(); err != nil {
+		t.Fatalf("ValidateTaskRequest(human-agent) error = %v", err)
 	}
 }

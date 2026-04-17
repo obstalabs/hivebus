@@ -15,7 +15,7 @@ func TestThreadTransitionAllowsInvestigationFlow(t *testing.T) {
 		CustomerTier: TierPro,
 		Source:       "nullbot",
 		Participants: []Participant{
-			{ID: "collector.nullbot", Kind: ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
@@ -44,7 +44,7 @@ func TestThreadTransitionRejectsSkippingToDone(t *testing.T) {
 		CustomerTier: TierPro,
 		Source:       "nullbot",
 		Participants: []Participant{
-			{ID: "collector.nullbot", Kind: ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
@@ -65,8 +65,8 @@ func TestThreadValidateRejectsDuplicateParticipants(t *testing.T) {
 		CustomerTier: TierPro,
 		Source:       "nullbot",
 		Participants: []Participant{
-			{ID: "collector.nullbot", Kind: ParticipantCollector},
-			{ID: "collector.nullbot", Kind: ParticipantCollector},
+			testCollectorParticipant(),
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
@@ -87,7 +87,7 @@ func TestThreadTransitionAllowsStatusTouch(t *testing.T) {
 		CustomerTier: TierPro,
 		Source:       "nullbot",
 		Participants: []Participant{
-			{ID: "collector.nullbot", Kind: ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC),
@@ -114,7 +114,7 @@ func TestThreadValidateRejectsMissingRequiredFields(t *testing.T) {
 		CustomerTier: TierPro,
 		Source:       "nullbot",
 		Participants: []Participant{
-			{ID: "collector.nullbot", Kind: ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
@@ -216,7 +216,7 @@ func TestThreadTransitionRejectsInvalidStateChanges(t *testing.T) {
 		CustomerTier: TierPro,
 		Source:       "nullbot",
 		Participants: []Participant{
-			{ID: "collector.nullbot", Kind: ParticipantCollector},
+			testCollectorParticipant(),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 9, 0, 0, 0, time.UTC),
@@ -245,8 +245,8 @@ func TestPendingClarificationTracksOpenRequest(t *testing.T) {
 		CustomerTier: TierPro,
 		Source:       "nullbot",
 		Participants: []Participant{
-			{ID: "collector.nullbot", Kind: ParticipantCollector},
-			{ID: "worker.smokevm", Kind: ParticipantAgent},
+			testCollectorParticipant(),
+			testAgentParticipant("worker.smokevm"),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
@@ -311,8 +311,8 @@ func TestPendingClarificationClearsAfterResponse(t *testing.T) {
 		CustomerTier: TierPro,
 		Source:       "nullbot",
 		Participants: []Participant{
-			{ID: "collector.nullbot", Kind: ParticipantCollector},
-			{ID: "worker.smokevm", Kind: ParticipantAgent},
+			testCollectorParticipant(),
+			testAgentParticipant("worker.smokevm"),
 		},
 		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
@@ -377,5 +377,31 @@ func TestPendingClarificationClearsAfterResponse(t *testing.T) {
 	}
 	if state != nil {
 		t.Fatalf("expected clarification to be resolved, got %#v", state)
+	}
+}
+
+func testCollectorParticipant() Participant {
+	return Participant{
+		ID:          "collector.nullbot",
+		Type:        ParticipantTypeService,
+		Kind:        ParticipantCollector,
+		DisplayName: "Nullbot Collector",
+		Visibility:  ParticipantVisibilityThread,
+		Service: &ServiceParticipant{
+			ServiceName: "nullbot",
+		},
+	}
+}
+
+func testAgentParticipant(id string) Participant {
+	return Participant{
+		ID:          id,
+		Type:        ParticipantTypeAgent,
+		Kind:        ParticipantAgent,
+		DisplayName: "Smoke Worker",
+		Visibility:  ParticipantVisibilityThread,
+		Agent: &AgentParticipant{
+			AgentID: id,
+		},
 	}
 }

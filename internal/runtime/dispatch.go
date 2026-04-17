@@ -38,7 +38,9 @@ type dispatchRequest struct {
 
 type dispatchSender struct {
 	ID        string                `json:"id"`
+	Type      model.ParticipantType `json:"participant_type,omitempty"`
 	Kind      model.ParticipantKind `json:"kind,omitempty"`
+	Name      string                `json:"display_name,omitempty"`
 	SessionID string                `json:"session_id"`
 	ThreadID  string                `json:"thread_id,omitempty"`
 	MessageID string                `json:"message_id,omitempty"`
@@ -195,25 +197,49 @@ func buildDispatch(request dispatchRequest) (model.Thread, model.Envelope, error
 	}
 
 	sender := request.Sender
+	if sender.Type == "" {
+		switch sender.Kind {
+		case model.ParticipantHuman:
+			sender.Type = model.ParticipantTypeHuman
+		case model.ParticipantService, model.ParticipantCollector:
+			sender.Type = model.ParticipantTypeService
+		default:
+			sender.Type = model.ParticipantTypeAgent
+		}
+	}
 	if sender.Kind == "" {
 		sender.Kind = model.ParticipantAgent
 	}
 
+	senderParticipant, err := dispatchParticipantFromSender(sender)
+	if err != nil {
+		return model.Thread{}, model.Envelope{}, err
+	}
+
 	participants := []model.Participant{
-		{
-			ID:   sender.ID,
-			Kind: sender.Kind,
-		},
+		senderParticipant,
 		{
 			ID:           dispatchRouteParticipantID,
+			Type:         model.ParticipantTypeService,
 			Kind:         model.ParticipantService,
+			DisplayName:  "Dispatch Router",
+			Visibility:   model.ParticipantVisibilityInternal,
 			Capabilities: []string{dispatchRouteCapability},
+			Service: &model.ServiceParticipant{
+				ServiceName: "dispatch-router",
+			},
 		},
 	}
 	if strings.TrimSpace(request.Target) != "" && request.Target != sender.ID {
 		participants = append(participants, model.Participant{
-			ID:   request.Target,
-			Kind: model.ParticipantAgent,
+			ID:          request.Target,
+			Type:        model.ParticipantTypeAgent,
+			Kind:        model.ParticipantAgent,
+			DisplayName: request.Target,
+			Visibility:  model.ParticipantVisibilityThread,
+			Agent: &model.AgentParticipant{
+				AgentID: request.Target,
+			},
 		})
 	}
 
@@ -269,6 +295,43 @@ func buildDispatch(request dispatchRequest) (model.Thread, model.Envelope, error
 	}
 
 	return thread, envelope, nil
+}
+
+func dispatchParticipantFromSender(sender dispatchSender) (model.Participant, error) {
+	participant := model.Participant{
+		ID:          sender.ID,
+		Type:        sender.Type,
+		Kind:        sender.Kind,
+		DisplayName: sender.Name,
+		Visibility:  model.ParticipantVisibilityThread,
+	}
+
+	if participant.DisplayName == "" {
+		participant.DisplayName = sender.ID
+	}
+
+	switch sender.Type {
+	case model.ParticipantTypeHuman:
+		participant.Human = &model.HumanParticipant{
+			HumanID:            sender.ID,
+			DeliveryPreference: model.HumanDeliveryInThread,
+		}
+	case model.ParticipantTypeService:
+		participant.Service = &model.ServiceParticipant{
+			ServiceName: sender.ID,
+		}
+	default:
+		participant.Type = model.ParticipantTypeAgent
+		participant.Agent = &model.AgentParticipant{
+			AgentID: sender.ID,
+		}
+	}
+
+	if err := participant.Validate(); err != nil {
+		return model.Participant{}, fmt.Errorf("invalid sender participant: %w", err)
+	}
+
+	return participant, nil
 }
 
 func buildResumeCapsule(snapshot store.ThreadSnapshot) (resumeCapsule, error) {

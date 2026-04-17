@@ -34,6 +34,74 @@ type ClarificationLifecycleSample struct {
 	Messages []model.Envelope `json:"messages"`
 }
 
+type ParticipantModelSample struct {
+	Thread   model.Thread     `json:"thread"`
+	Messages []model.Envelope `json:"messages"`
+}
+
+func sampleHumanParticipant(
+	id string,
+	displayName string,
+	humanID string,
+	role string,
+	preference model.HumanDeliveryPreference,
+) model.Participant {
+	return model.Participant{
+		ID:          id,
+		Type:        model.ParticipantTypeHuman,
+		Kind:        model.ParticipantHuman,
+		DisplayName: displayName,
+		Visibility:  model.ParticipantVisibilityThread,
+		Human: &model.HumanParticipant{
+			HumanID:            humanID,
+			Role:               role,
+			DeliveryPreference: preference,
+		},
+	}
+}
+
+func sampleAgentParticipant(
+	id string,
+	displayName string,
+	agentID string,
+	installationID string,
+	capabilities ...string,
+) model.Participant {
+	return model.Participant{
+		ID:           id,
+		Type:         model.ParticipantTypeAgent,
+		Kind:         model.ParticipantAgent,
+		DisplayName:  displayName,
+		Visibility:   model.ParticipantVisibilityThread,
+		Capabilities: capabilities,
+		Agent: &model.AgentParticipant{
+			AgentID:        agentID,
+			InstallationID: installationID,
+		},
+	}
+}
+
+func sampleServiceParticipant(
+	id string,
+	displayName string,
+	kind model.ParticipantKind,
+	serviceName string,
+	visibility model.ParticipantVisibility,
+	capabilities ...string,
+) model.Participant {
+	return model.Participant{
+		ID:           id,
+		Type:         model.ParticipantTypeService,
+		Kind:         kind,
+		DisplayName:  displayName,
+		Visibility:   visibility,
+		Capabilities: capabilities,
+		Service: &model.ServiceParticipant{
+			ServiceName: serviceName,
+		},
+	}
+}
+
 // SampleCase returns a fully verified sample ready for WO creation.
 func SampleCase() CaseBundle {
 	createdAt := time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC)
@@ -48,11 +116,44 @@ func SampleCase() CaseBundle {
 		Source:       "nullbot",
 		Summary:      "Nullbot collected gateway errors, Postgres saturation, and deployment metadata.",
 		Participants: []model.Participant{
-			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
-			{ID: "agent.dispatch", Kind: model.ParticipantService, Capabilities: []string{"route.case"}},
-			{ID: "agent.investigator", Kind: model.ParticipantAgent, Capabilities: []string{"incident.diagnose"}},
-			{ID: "service.workledger", Kind: model.ParticipantService, Capabilities: []string{"work_order.create"}},
-			{ID: "service.hiveram", Kind: model.ParticipantService, Capabilities: []string{"commercial.sync"}},
+			sampleServiceParticipant(
+				"collector.nullbot",
+				"Nullbot Collector",
+				model.ParticipantCollector,
+				"nullbot",
+				model.ParticipantVisibilityThread,
+			),
+			sampleServiceParticipant(
+				"agent.dispatch",
+				"Dispatch Router",
+				model.ParticipantService,
+				"dispatch-router",
+				model.ParticipantVisibilityInternal,
+				"route.case",
+			),
+			sampleAgentParticipant(
+				"agent.investigator",
+				"Investigator Agent",
+				"investigator-core",
+				"install_investigator_001",
+				"incident.diagnose",
+			),
+			sampleServiceParticipant(
+				"service.workledger",
+				"Workledger",
+				model.ParticipantService,
+				"workledger",
+				model.ParticipantVisibilityInternal,
+				"work_order.create",
+			),
+			sampleServiceParticipant(
+				"service.hiveram",
+				"Hiveram",
+				model.ParticipantService,
+				"hiveram",
+				model.ParticipantVisibilityInternal,
+				"commercial.sync",
+			),
 		},
 		Evidence: []model.Artifact{
 			{
@@ -407,8 +508,22 @@ func SampleEdgeRouting() EdgeRoutingSample {
 		Source:       "hivebus",
 		Summary:      "Dispatch asks a field nullbot participant for follow-up evidence using participant identity, not host location.",
 		Participants: []model.Participant{
-			{ID: "agent.dispatch", Kind: model.ParticipantService, Capabilities: []string{"route.case"}},
-			{ID: "agent.field.nullbot", Kind: model.ParticipantAgent, Capabilities: []string{"evidence.collect", "clarification.reply"}},
+			sampleServiceParticipant(
+				"agent.dispatch",
+				"Dispatch Router",
+				model.ParticipantService,
+				"dispatch-router",
+				model.ParticipantVisibilityInternal,
+				"route.case",
+			),
+			sampleAgentParticipant(
+				"agent.field.nullbot",
+				"Field Nullbot",
+				"nullbot-edge",
+				"install_nullbot_edge_001",
+				"evidence.collect",
+				"clarification.reply",
+			),
 		},
 		CreatedAt: baseTime,
 		UpdatedAt: baseTime.Add(2 * time.Minute),
@@ -591,9 +706,28 @@ func SampleClarificationLifecycle() ClarificationLifecycleSample {
 		Source:       "hivebus",
 		Summary:      "Demonstrates clarification receipts, session replacement, and terminal outcomes without infinite conversational drift.",
 		Participants: []model.Participant{
-			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
-			{ID: "agent.field.nullbot", Kind: model.ParticipantAgent, Capabilities: []string{"clarification.reply"}},
-			{ID: "service.hivebus", Kind: model.ParticipantService, Capabilities: []string{"clarification.track"}},
+			sampleServiceParticipant(
+				"collector.nullbot",
+				"Nullbot Collector",
+				model.ParticipantCollector,
+				"nullbot",
+				model.ParticipantVisibilityThread,
+			),
+			sampleAgentParticipant(
+				"agent.field.nullbot",
+				"Field Nullbot",
+				"nullbot-edge",
+				"install_nullbot_edge_001",
+				"clarification.reply",
+			),
+			sampleServiceParticipant(
+				"service.hivebus",
+				"Hivebus Runtime",
+				model.ParticipantService,
+				"hivebus",
+				model.ParticipantVisibilityInternal,
+				"clarification.track",
+			),
 		},
 		CreatedAt: baseTime,
 		UpdatedAt: baseTime.Add(4 * time.Minute),
@@ -741,6 +875,151 @@ func SampleClarificationLifecycle() ClarificationLifecycleSample {
 	}
 
 	return ClarificationLifecycleSample{
+		Thread:   thread,
+		Messages: messages,
+	}
+}
+
+// SampleParticipantModel demonstrates that human, agent, and service actors
+// share the same thread and envelope model, including human-to-human traffic.
+func SampleParticipantModel() ParticipantModelSample {
+	baseTime := time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC)
+
+	thread := model.Thread{
+		ThreadID:     "thr_participant_types",
+		Title:        "Participant model supports human, agent, and service actors",
+		Status:       model.ThreadStatusCollecting,
+		CustomerTier: model.TierPro,
+		Source:       "hivebus",
+		Summary:      "Demonstrates human-to-human and human-to-agent traffic inside the same thread contract.",
+		Participants: []model.Participant{
+			sampleHumanParticipant(
+				"human.reporter",
+				"Alex Reporter",
+				"usr_alex_reporter",
+				"reporter",
+				model.HumanDeliveryInThread,
+			),
+			sampleHumanParticipant(
+				"human.operator",
+				"Pavel Operator",
+				"usr_pavel_operator",
+				"operator",
+				model.HumanDeliveryTriageQueue,
+			),
+			sampleAgentParticipant(
+				"agent.field.nullbot",
+				"Field Nullbot",
+				"nullbot-edge",
+				"install_nullbot_edge_001",
+				"clarification.reply",
+				"evidence.collect",
+			),
+			sampleServiceParticipant(
+				"service.hivebus",
+				"Hivebus Runtime",
+				model.ParticipantService,
+				"hivebus",
+				model.ParticipantVisibilityInternal,
+				"thread.coordinate",
+			),
+		},
+		CreatedAt: baseTime,
+		UpdatedAt: baseTime.Add(2 * time.Minute),
+	}
+
+	humanRequestPayload, err := json.Marshal(map[string]any{
+		"task": "Confirm whether the disposable smoke ARM64 VM still has the repro password.",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	humanResponsePayload, err := json.Marshal(map[string]any{
+		"result": "Yes, but it is disposable and will be deleted after the smoke pass.",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	agentTaskPayload, err := json.Marshal(map[string]any{
+		"intent": "collect smoke logs after human confirmation",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	messages := []model.Envelope{
+		{
+			MessageID:      "msg_participant_001",
+			ThreadID:       thread.ThreadID,
+			From:           "human.operator",
+			To:             []string{"human.reporter"},
+			Type:           model.MessageTypeTaskRequest,
+			Payload:        humanRequestPayload,
+			SentAt:         baseTime,
+			IdempotencyKey: "idem_msg_participant_001",
+			Trace: model.Trace{
+				CorrelationID: "corr_thr_participant_types",
+				SpanID:        "span_human_request",
+				Model:         "human",
+				Verified:      true,
+			},
+			Security: model.Security{
+				Scheme:    "ed25519",
+				Nonce:     "nonce_msg_participant_001",
+				Signature: "sig_msg_participant_001",
+				Signed:    true,
+			},
+		},
+		{
+			MessageID:      "msg_participant_002",
+			ThreadID:       thread.ThreadID,
+			From:           "human.reporter",
+			To:             []string{"human.operator"},
+			Type:           model.MessageTypeTaskResultFinal,
+			Payload:        humanResponsePayload,
+			ReplyTo:        "msg_participant_001",
+			SentAt:         baseTime.Add(5 * time.Minute),
+			IdempotencyKey: "idem_msg_participant_002",
+			Trace: model.Trace{
+				CorrelationID: "corr_thr_participant_types",
+				SpanID:        "span_human_response",
+				Model:         "human",
+				Verified:      true,
+			},
+			Security: model.Security{
+				Scheme:    "ed25519",
+				Nonce:     "nonce_msg_participant_002",
+				Signature: "sig_msg_participant_002",
+				Signed:    true,
+			},
+		},
+		{
+			MessageID:      "msg_participant_003",
+			ThreadID:       thread.ThreadID,
+			From:           "human.operator",
+			To:             []string{"agent.field.nullbot"},
+			Type:           model.MessageTypeTaskRequest,
+			Payload:        agentTaskPayload,
+			SentAt:         baseTime.Add(10 * time.Minute),
+			IdempotencyKey: "idem_msg_participant_003",
+			Trace: model.Trace{
+				CorrelationID: "corr_thr_participant_types",
+				SpanID:        "span_agent_request",
+				Model:         "human",
+				Verified:      true,
+			},
+			Security: model.Security{
+				Scheme:    "ed25519",
+				Nonce:     "nonce_msg_participant_003",
+				Signature: "sig_msg_participant_003",
+				Signed:    true,
+			},
+		},
+	}
+
+	return ParticipantModelSample{
 		Thread:   thread,
 		Messages: messages,
 	}

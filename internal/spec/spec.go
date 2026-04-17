@@ -11,6 +11,7 @@ type Document struct {
 	Version                string                         `json:"version"`
 	Description            string                         `json:"description"`
 	MessageTypes           []model.MessageType            `json:"message_types"`
+	Participants           ParticipantContract            `json:"participants"`
 	Authorization          AuthorizationContract          `json:"authorization"`
 	ClarificationLifecycle ClarificationLifecycleContract `json:"clarification_lifecycle"`
 	EdgeRouting            EdgeRoutingContract            `json:"edge_routing"`
@@ -32,6 +33,15 @@ type CapabilityLifecycleContract struct {
 	RefusalReasons []string            `json:"refusal_reasons"`
 	TrustRoots     []string            `json:"trust_roots"`
 	Consumers      map[string][]string `json:"consumers"`
+}
+
+type ParticipantContract struct {
+	Types              []string            `json:"types"`
+	SharedFields       []string            `json:"shared_fields"`
+	TypeSpecificFields map[string][]string `json:"type_specific_fields"`
+	MembershipRules    map[string][]string `json:"membership_rules"`
+	VisibilityRules    map[string][]string `json:"visibility_rules"`
+	AuthorizationRules map[string][]string `json:"authorization_rules"`
 }
 
 type EdgeRoutingContract struct {
@@ -92,6 +102,70 @@ func V0() Document {
 			model.MessageTypeDiagnosisPropose,
 			model.MessageTypeWorkOrderCreate,
 			model.MessageTypeTaskCancel,
+		},
+		Participants: ParticipantContract{
+			Types: []string{
+				string(model.ParticipantTypeHuman),
+				string(model.ParticipantTypeAgent),
+				string(model.ParticipantTypeService),
+			},
+			SharedFields: []string{
+				"id",
+				"participant_type",
+				"display_name",
+				"visibility",
+				"capabilities",
+			},
+			TypeSpecificFields: map[string][]string{
+				"human": {
+					"human.human_id",
+					"human.role",
+					"human.delivery_preference",
+				},
+				"agent": {
+					"agent.agent_id",
+					"agent.installation_id",
+				},
+				"service": {
+					"service.service_name",
+				},
+			},
+			MembershipRules: map[string][]string{
+				"human": {
+					"humans are explicit thread participants; no side channel is required for human-to-human traffic",
+					"human requests still use the same envelope and thread membership rules as agents and services",
+				},
+				"agent": {
+					"agents participate in the thread directly and pair with WO-9 session routing by participant_id",
+					"agent membership does not replace authorization checks from WO-10",
+				},
+				"service": {
+					"services may be thread-visible or internal, but they still keep first-class participant identity",
+					"service actors remain addressable without becoming implicit transport adapters",
+				},
+			},
+			VisibilityRules: map[string][]string{
+				"human": {
+					"human participants are always thread-visible",
+				},
+				"agent": {
+					"agents default to thread visibility so replies stay in the same transcript",
+				},
+				"service": {
+					"services may be thread-visible or internal depending on whether they speak in the thread or only coordinate it",
+				},
+			},
+			AuthorizationRules: map[string][]string{
+				"human": {
+					"human senders remain first-class authorization subjects instead of a special-case UI path",
+				},
+				"agent": {
+					"agent requests compose with structured sender_participant_id and participant_membership from the authorization contract",
+				},
+				"service": {
+					"service participants keep the same sender identity and approval surface as every other actor type",
+				},
+			},
 		},
 		Authorization: AuthorizationContract{
 			RequiredFields: []string{

@@ -81,23 +81,6 @@ var allowedTransitions = map[ThreadStatus][]ThreadStatus{
 	},
 }
 
-// ParticipantKind classifies who is active in a thread.
-type ParticipantKind string
-
-const (
-	ParticipantCollector ParticipantKind = "collector"
-	ParticipantAgent     ParticipantKind = "agent"
-	ParticipantHuman     ParticipantKind = "human"
-	ParticipantService   ParticipantKind = "service"
-)
-
-// Participant is any actor with a stable identity inside a thread.
-type Participant struct {
-	ID           string          `json:"id"`
-	Kind         ParticipantKind `json:"kind"`
-	Capabilities []string        `json:"capabilities,omitempty"`
-}
-
 // Thread groups messages, evidence, and lifecycle around a single user story.
 type Thread struct {
 	ThreadID     string        `json:"thread_id"`
@@ -145,10 +128,10 @@ func (t Thread) Validate() error {
 
 	seenParticipants := make(map[string]struct{}, len(t.Participants))
 	for _, participant := range t.Participants {
-		participantID := strings.TrimSpace(participant.ID)
-		if participantID == "" {
-			return errors.New("participant id is required")
+		if err := participant.Validate(); err != nil {
+			return fmt.Errorf("invalid participant: %w", err)
 		}
+		participantID := strings.TrimSpace(participant.ID)
 
 		if _, exists := seenParticipants[participantID]; exists {
 			return fmt.Errorf("duplicate participant %q", participantID)

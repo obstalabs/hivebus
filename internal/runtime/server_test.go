@@ -163,7 +163,16 @@ func sampleThread() model.Thread {
 		CustomerTier: model.TierPro,
 		Source:       "nullbot",
 		Participants: []model.Participant{
-			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
+			{
+				ID:          "collector.nullbot",
+				Type:        model.ParticipantTypeService,
+				Kind:        model.ParticipantCollector,
+				DisplayName: "Nullbot Collector",
+				Visibility:  model.ParticipantVisibilityThread,
+				Service: &model.ServiceParticipant{
+					ServiceName: "nullbot",
+				},
+			},
 		},
 		CreatedAt: now,
 		UpdatedAt: now,

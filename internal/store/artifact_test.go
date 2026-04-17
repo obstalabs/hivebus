@@ -23,9 +23,18 @@ func TestAppendArtifactPersistsEvidenceInThreadReplay(t *testing.T) {
 		Status:       model.ThreadStatusReported,
 		CustomerTier: model.TierPro,
 		Source:       "nullbot",
-		Participants: []model.Participant{{ID: "collector.nullbot", Kind: model.ParticipantCollector}},
-		CreatedAt:    time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC),
-		UpdatedAt:    time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC),
+		Participants: []model.Participant{{
+			ID:          "collector.nullbot",
+			Type:        model.ParticipantTypeService,
+			Kind:        model.ParticipantCollector,
+			DisplayName: "Nullbot Collector",
+			Visibility:  model.ParticipantVisibilityThread,
+			Service: &model.ServiceParticipant{
+				ServiceName: "nullbot",
+			},
+		}},
+		CreatedAt: time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC),
 	}
 	if _, err := st.AppendThread(t.Context(), thread); err != nil {
 		t.Fatalf("AppendThread() error = %v", err)
