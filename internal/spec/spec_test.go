@@ -61,12 +61,28 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 		t.Fatal("expected capability lifecycle required fields")
 	}
 
+	if len(document.CapabilityLifecycle.DeliveryModes) != 2 {
+		t.Fatalf("expected 2 capability delivery modes, got %d", len(document.CapabilityLifecycle.DeliveryModes))
+	}
+
+	if len(document.CapabilityLifecycle.RefusalReasons) != 4 {
+		t.Fatalf("expected 4 capability refusal reasons, got %d", len(document.CapabilityLifecycle.RefusalReasons))
+	}
+
+	if len(document.CapabilityLifecycle.TrustRoots) == 0 {
+		t.Fatal("expected capability lifecycle trust roots")
+	}
+
 	if len(document.CapabilityLifecycle.Consumers["sentinel"]) == 0 {
 		t.Fatal("expected sentinel capability lifecycle consumer rules")
 	}
 
 	if len(document.CapabilityLifecycle.Consumers["workledger"]) == 0 {
 		t.Fatal("expected workledger capability lifecycle consumer rules")
+	}
+
+	if len(document.CapabilityLifecycle.Consumers["policy"]) == 0 {
+		t.Fatal("expected policy capability lifecycle consumer rules")
 	}
 }
 

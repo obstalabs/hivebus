@@ -25,6 +25,9 @@ type Document struct {
 type CapabilityLifecycleContract struct {
 	MessageTypes   []model.MessageType `json:"message_types"`
 	RequiredFields []string            `json:"required_fields"`
+	DeliveryModes  []string            `json:"delivery_modes"`
+	RefusalReasons []string            `json:"refusal_reasons"`
+	TrustRoots     []string            `json:"trust_roots"`
 	Consumers      map[string][]string `json:"consumers"`
 }
 
@@ -73,15 +76,34 @@ func V0() Document {
 				"capability_class",
 				"version",
 				"digest",
+				"artifact_ref",
+				"attestation_ref",
 				"signer",
+				"trust_root",
 				"requested_by",
 				"approved_by",
 				"origin_thread_id|origin_work_order_id",
+				"expires_at",
+				"delivery_mode",
 				"evidence_ids",
 				"attestation_state",
 				"task_outcome",
 				"teardown_state",
+				"refusal_reason",
 				"failure_reason",
+			},
+			DeliveryModes: []string{
+				string(model.CapabilityDeliveryReference),
+				string(model.CapabilityDeliveryInlineException),
+			},
+			RefusalReasons: []string{
+				string(model.CapabilityRefusalUnknownSigner),
+				string(model.CapabilityRefusalExpiredArtifact),
+				string(model.CapabilityRefusalClassMismatch),
+				string(model.CapabilityRefusalPolicyDenied),
+			},
+			TrustRoots: []string{
+				"obstalabs-release-root",
 			},
 			Consumers: map[string][]string{
 				"sentinel": {
@@ -91,6 +113,10 @@ func V0() Document {
 				"workledger": {
 					"map install_verified, doctor_passed, doctor_failed, capability_active, task_completed, teardown_completed, and teardown_failed into work-order notes or lifecycle state",
 					"never infer attestation or teardown success from missing events",
+				},
+				"policy": {
+					"reject unknown signer, expired artifact, class mismatch, or policy-denied install requests structurally",
+					"treat inline capability transport as exceptional and policy-gated",
 				},
 			},
 		},

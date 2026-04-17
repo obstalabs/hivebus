@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 type CapabilityAttestationState string
@@ -38,6 +39,34 @@ var validCapabilityTaskOutcomes = []CapabilityTaskOutcome{
 	CapabilityTaskFailed,
 }
 
+type CapabilityDeliveryMode string
+
+const (
+	CapabilityDeliveryReference       CapabilityDeliveryMode = "reference"
+	CapabilityDeliveryInlineException CapabilityDeliveryMode = "inline_exception"
+)
+
+var validCapabilityDeliveryModes = []CapabilityDeliveryMode{
+	CapabilityDeliveryReference,
+	CapabilityDeliveryInlineException,
+}
+
+type CapabilityRefusalReason string
+
+const (
+	CapabilityRefusalUnknownSigner   CapabilityRefusalReason = "unknown_signer"
+	CapabilityRefusalExpiredArtifact CapabilityRefusalReason = "expired_artifact"
+	CapabilityRefusalClassMismatch   CapabilityRefusalReason = "class_mismatch"
+	CapabilityRefusalPolicyDenied    CapabilityRefusalReason = "policy_denied"
+)
+
+var validCapabilityRefusalReasons = []CapabilityRefusalReason{
+	CapabilityRefusalUnknownSigner,
+	CapabilityRefusalExpiredArtifact,
+	CapabilityRefusalClassMismatch,
+	CapabilityRefusalPolicyDenied,
+}
+
 type CapabilityTeardownState string
 
 const (
@@ -60,15 +89,21 @@ type CapabilityLifecyclePayload struct {
 	CapabilityClass   string                     `json:"capability_class"`
 	Version           string                     `json:"version"`
 	Digest            string                     `json:"digest"`
+	ArtifactRef       string                     `json:"artifact_ref,omitempty"`
+	AttestationRef    string                     `json:"attestation_ref,omitempty"`
 	Signer            string                     `json:"signer"`
+	TrustRoot         string                     `json:"trust_root,omitempty"`
 	RequestedBy       string                     `json:"requested_by"`
 	ApprovedBy        string                     `json:"approved_by,omitempty"`
 	OriginThreadID    string                     `json:"origin_thread_id,omitempty"`
 	OriginWorkOrderID string                     `json:"origin_work_order_id,omitempty"`
+	ExpiresAt         string                     `json:"expires_at,omitempty"`
+	DeliveryMode      CapabilityDeliveryMode     `json:"delivery_mode,omitempty"`
 	EvidenceIDs       []string                   `json:"evidence_ids,omitempty"`
 	AttestationState  CapabilityAttestationState `json:"attestation_state,omitempty"`
 	TaskOutcome       CapabilityTaskOutcome      `json:"task_outcome,omitempty"`
 	TeardownState     CapabilityTeardownState    `json:"teardown_state,omitempty"`
+	RefusalReason     CapabilityRefusalReason    `json:"refusal_reason,omitempty"`
 	FailureReason     string                     `json:"failure_reason,omitempty"`
 }
 
@@ -86,12 +121,20 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 		return errors.New("digest is required")
 	case !IsSHA256Hex(strings.TrimSpace(p.Digest)):
 		return errors.New("digest must be a 64-character lowercase hex digest")
+	case strings.TrimSpace(p.ArtifactRef) == "":
+		return errors.New("artifact_ref is required")
+	case strings.TrimSpace(p.AttestationRef) == "":
+		return errors.New("attestation_ref is required")
 	case strings.TrimSpace(p.Signer) == "":
 		return errors.New("signer is required")
+	case strings.TrimSpace(p.TrustRoot) == "":
+		return errors.New("trust_root is required")
 	case strings.TrimSpace(p.RequestedBy) == "":
 		return errors.New("requested_by is required")
 	case strings.TrimSpace(p.OriginThreadID) == "" && strings.TrimSpace(p.OriginWorkOrderID) == "":
 		return errors.New("either origin_thread_id or origin_work_order_id is required")
+	case strings.TrimSpace(p.ExpiresAt) == "":
+		return errors.New("expires_at is required")
 	}
 
 	seenEvidence := make(map[string]struct{}, len(p.EvidenceIDs))
@@ -112,12 +155,24 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 	if p.TaskOutcome != "" && !slices.Contains(validCapabilityTaskOutcomes, p.TaskOutcome) {
 		return fmt.Errorf("unsupported task_outcome %q", p.TaskOutcome)
 	}
+	if p.DeliveryMode == "" || !slices.Contains(validCapabilityDeliveryModes, p.DeliveryMode) {
+		return fmt.Errorf("unsupported delivery_mode %q", p.DeliveryMode)
+	}
 	if p.TeardownState != "" && !slices.Contains(validCapabilityTeardownStates, p.TeardownState) {
 		return fmt.Errorf("unsupported teardown_state %q", p.TeardownState)
+	}
+	if p.RefusalReason != "" && !slices.Contains(validCapabilityRefusalReasons, p.RefusalReason) {
+		return fmt.Errorf("unsupported refusal_reason %q", p.RefusalReason)
+	}
+	if _, err := time.Parse(time.RFC3339, p.ExpiresAt); err != nil {
+		return fmt.Errorf("expires_at must be RFC3339: %w", err)
 	}
 
 	switch eventType {
 	case MessageTypeInstallRequested:
+		if p.RefusalReason != "" {
+			return errors.New("capability.install.requested must not set refusal_reason")
+		}
 		return validateLifecycleState(
 			p,
 			CapabilityAttestationRequested,
@@ -127,6 +182,9 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 			true,
 		)
 	case MessageTypeInstallVerified:
+		if p.RefusalReason != "" {
+			return errors.New("capability.install.verified must not set refusal_reason")
+		}
 		return validateLifecycleState(
 			p,
 			CapabilityAttestationVerified,
@@ -136,6 +194,9 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 			true,
 		)
 	case MessageTypeDoctorPassed:
+		if p.RefusalReason != "" {
+			return errors.New("capability.doctor.passed must not set refusal_reason")
+		}
 		return validateLifecycleState(
 			p,
 			CapabilityAttestationDoctorPassed,
@@ -145,6 +206,9 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 			true,
 		)
 	case MessageTypeDoctorFailed:
+		if p.RefusalReason == "" {
+			return errors.New("capability.doctor.failed requires refusal_reason")
+		}
 		return validateLifecycleState(
 			p,
 			CapabilityAttestationDoctorFailed,
@@ -154,6 +218,9 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 			false,
 		)
 	case MessageTypeCapabilityActive:
+		if p.RefusalReason != "" {
+			return errors.New("capability.active must not set refusal_reason")
+		}
 		return validateLifecycleState(
 			p,
 			CapabilityAttestationActive,
@@ -181,8 +248,14 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 		if p.TaskOutcome == CapabilityTaskSucceeded && strings.TrimSpace(p.FailureReason) != "" {
 			return errors.New("capability.task.completed must not set failure_reason when task_outcome succeeded")
 		}
+		if p.RefusalReason != "" {
+			return errors.New("capability.task.completed must not set refusal_reason")
+		}
 		return nil
 	case MessageTypeTeardownRequested:
+		if p.RefusalReason != "" {
+			return errors.New("capability.teardown.requested must not set refusal_reason")
+		}
 		return validateLifecycleState(
 			p,
 			CapabilityAttestationActive,
@@ -192,6 +265,9 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 			true,
 		)
 	case MessageTypeTeardownCompleted:
+		if p.RefusalReason != "" {
+			return errors.New("capability.teardown.completed must not set refusal_reason")
+		}
 		return validateLifecycleState(
 			p,
 			CapabilityAttestationActive,
@@ -201,6 +277,9 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 			true,
 		)
 	case MessageTypeTeardownFailed:
+		if p.RefusalReason == "" {
+			return errors.New("capability.teardown.failed requires refusal_reason")
+		}
 		return validateLifecycleState(
 			p,
 			CapabilityAttestationActive,

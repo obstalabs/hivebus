@@ -56,6 +56,18 @@ func TestCapabilityLifecyclePayloadValidateRejectsMissingOrigin(t *testing.T) {
 	}
 }
 
+func TestCapabilityLifecyclePayloadValidateRejectsMissingArtifactReference(t *testing.T) {
+	t.Helper()
+
+	payload := sampleCapabilityLifecyclePayload()
+	payload.AttestationState = CapabilityAttestationRequested
+	payload.ArtifactRef = ""
+
+	if err := payload.Validate(MessageTypeInstallRequested); err == nil {
+		t.Fatal("Validate(install requested) expected an error")
+	}
+}
+
 func TestEnvelopeValidateCapabilityLifecycleAcceptsTaskCompleted(t *testing.T) {
 	t.Helper()
 
@@ -99,10 +111,15 @@ func sampleCapabilityLifecyclePayload() CapabilityLifecyclePayload {
 		CapabilityClass:   "go-testing",
 		Version:           "1.22.3",
 		Digest:            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ArtifactRef:       "artifact://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		AttestationRef:    "attestation://sig/cap_go_test_arm64",
 		Signer:            "buildkite-release",
+		TrustRoot:         "obstalabs-release-root",
 		RequestedBy:       "collector.nullbot",
 		OriginThreadID:    "thr_smoke_arm64",
 		OriginWorkOrderID: "WO-167",
+		ExpiresAt:         "2026-04-18T06:00:00Z",
+		DeliveryMode:      CapabilityDeliveryReference,
 		EvidenceIDs:       []string{"art_capability_receipt"},
 	}
 }
