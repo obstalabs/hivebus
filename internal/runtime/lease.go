@@ -84,7 +84,8 @@ func (s *server) handleLeaseComplete(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, store.ErrLeaseNotFound):
 		writeError(w, http.StatusNotFound, err)
-	case errors.Is(err, store.ErrLeaseExpired), errors.Is(err, store.ErrLeaseFinalized):
+	case errors.Is(err, store.ErrLeaseExpired), errors.Is(err, store.ErrLeaseFinalized),
+		errors.Is(err, store.ErrClarificationPending):
 		writeError(w, http.StatusConflict, err)
 	case errors.Is(err, store.ErrLeaseNotOwned):
 		writeError(w, http.StatusForbidden, err)

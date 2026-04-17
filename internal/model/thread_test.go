@@ -234,3 +234,148 @@ func TestThreadTransitionRejectsInvalidStateChanges(t *testing.T) {
 		t.Fatal("Transition() expected an error for backwards timestamp")
 	}
 }
+
+func TestPendingClarificationTracksOpenRequest(t *testing.T) {
+	t.Helper()
+
+	thread := Thread{
+		ThreadID:     "thr_123",
+		Title:        "Latency in production",
+		Status:       ThreadStatusInvestigating,
+		CustomerTier: TierPro,
+		Source:       "nullbot",
+		Participants: []Participant{
+			{ID: "collector.nullbot", Kind: ParticipantCollector},
+			{ID: "worker.smokevm", Kind: ParticipantAgent},
+		},
+		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+	}
+
+	task := Envelope{
+		MessageID:      "msg_task",
+		ThreadID:       thread.ThreadID,
+		From:           "collector.nullbot",
+		To:             []string{"worker.smokevm"},
+		Type:           MessageTypeTaskRequest,
+		Payload:        []byte(`{"issue":"latency"}`),
+		SentAt:         thread.CreatedAt.Add(1 * time.Minute),
+		IdempotencyKey: "idem_task",
+		Trace:          Trace{CorrelationID: "corr_123"},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_task",
+		},
+	}
+	deadline := task.SentAt.Add(5 * time.Minute)
+	clarification := Envelope{
+		MessageID:      "msg_clarify",
+		ThreadID:       thread.ThreadID,
+		From:           "worker.smokevm",
+		To:             []string{"collector.nullbot"},
+		Type:           MessageTypeClarifyRequest,
+		Payload:        []byte(`{"question":"which env?"}`),
+		ReplyTo:        task.MessageID,
+		Deadline:       &deadline,
+		SentAt:         task.SentAt.Add(1 * time.Minute),
+		IdempotencyKey: "idem_clarify",
+		Trace:          Trace{CorrelationID: "corr_123"},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_clarify",
+		},
+	}
+
+	state, err := thread.PendingClarification([]Envelope{task, clarification}, task.SentAt.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("PendingClarification() error = %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected pending clarification state")
+	}
+	if state.TaskMessageID != task.MessageID {
+		t.Fatalf("expected task message %q, got %q", task.MessageID, state.TaskMessageID)
+	}
+	if state.Expired {
+		t.Fatal("expected clarification to still be active")
+	}
+}
+
+func TestPendingClarificationClearsAfterResponse(t *testing.T) {
+	t.Helper()
+
+	thread := Thread{
+		ThreadID:     "thr_123",
+		Title:        "Latency in production",
+		Status:       ThreadStatusInvestigating,
+		CustomerTier: TierPro,
+		Source:       "nullbot",
+		Participants: []Participant{
+			{ID: "collector.nullbot", Kind: ParticipantCollector},
+			{ID: "worker.smokevm", Kind: ParticipantAgent},
+		},
+		CreatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+	}
+
+	task := Envelope{
+		MessageID:      "msg_task",
+		ThreadID:       thread.ThreadID,
+		From:           "collector.nullbot",
+		To:             []string{"worker.smokevm"},
+		Type:           MessageTypeTaskRequest,
+		Payload:        []byte(`{"issue":"latency"}`),
+		SentAt:         thread.CreatedAt.Add(1 * time.Minute),
+		IdempotencyKey: "idem_task",
+		Trace:          Trace{CorrelationID: "corr_123"},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_task",
+		},
+	}
+	deadline := task.SentAt.Add(5 * time.Minute)
+	clarification := Envelope{
+		MessageID:      "msg_clarify",
+		ThreadID:       thread.ThreadID,
+		From:           "worker.smokevm",
+		To:             []string{"collector.nullbot"},
+		Type:           MessageTypeClarifyRequest,
+		Payload:        []byte(`{"question":"which env?"}`),
+		ReplyTo:        task.MessageID,
+		Deadline:       &deadline,
+		SentAt:         task.SentAt.Add(1 * time.Minute),
+		IdempotencyKey: "idem_clarify",
+		Trace:          Trace{CorrelationID: "corr_123"},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_clarify",
+		},
+	}
+	response := Envelope{
+		MessageID:      "msg_answer",
+		ThreadID:       thread.ThreadID,
+		From:           "collector.nullbot",
+		To:             []string{"worker.smokevm"},
+		Type:           MessageTypeClarifyResponse,
+		Payload:        []byte(`{"answer":"prod-eu-1"}`),
+		ReplyTo:        clarification.MessageID,
+		SentAt:         task.SentAt.Add(2 * time.Minute),
+		IdempotencyKey: "idem_answer",
+		Trace:          Trace{CorrelationID: "corr_123"},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_answer",
+		},
+	}
+
+	state, err := thread.PendingClarification(
+		[]Envelope{task, clarification, response},
+		task.SentAt.Add(3*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("PendingClarification() error = %v", err)
+	}
+	if state != nil {
+		t.Fatalf("expected clarification to be resolved, got %#v", state)
+	}
+}

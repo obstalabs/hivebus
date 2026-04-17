@@ -271,3 +271,51 @@ func (e Envelope) ValidateTaskResultPart(request Envelope) error {
 
 	return nil
 }
+
+// ValidateClarificationRequest applies runtime checks for a clarification.request envelope.
+func (e Envelope) ValidateClarificationRequest(request Envelope) error {
+	if err := request.ValidateTaskRequest(); err != nil {
+		return fmt.Errorf("invalid request envelope: %w", err)
+	}
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	if e.Type != MessageTypeClarifyRequest {
+		return fmt.Errorf("expected %q, got %q", MessageTypeClarifyRequest, e.Type)
+	}
+	if e.ThreadID != request.ThreadID {
+		return errors.New("clarification.request thread_id must match request thread_id")
+	}
+	if strings.TrimSpace(e.ReplyTo) != request.MessageID {
+		return errors.New("clarification.request reply_to must match request message_id")
+	}
+	if e.Deadline == nil {
+		return errors.New("clarification.request deadline is required")
+	}
+
+	return nil
+}
+
+// ValidateClarificationResponse applies runtime checks for a clarification.response envelope.
+func (e Envelope) ValidateClarificationResponse(
+	taskRequest Envelope,
+	clarificationRequest Envelope,
+) error {
+	if err := clarificationRequest.ValidateClarificationRequest(taskRequest); err != nil {
+		return fmt.Errorf("invalid clarification request envelope: %w", err)
+	}
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	if e.Type != MessageTypeClarifyResponse {
+		return fmt.Errorf("expected %q, got %q", MessageTypeClarifyResponse, e.Type)
+	}
+	if e.ThreadID != clarificationRequest.ThreadID {
+		return errors.New("clarification.response thread_id must match clarification.request thread_id")
+	}
+	if strings.TrimSpace(e.ReplyTo) != clarificationRequest.MessageID {
+		return errors.New("clarification.response reply_to must match clarification.request message_id")
+	}
+
+	return nil
+}

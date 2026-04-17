@@ -187,6 +187,13 @@ func (s *Store) LoadThread(ctx context.Context, threadID string) (ThreadSnapshot
 		_ = rows.Close()
 	}()
 
+	return loadThreadSnapshotRows(rows, threadID)
+}
+
+func loadThreadSnapshotRows(
+	rows *sql.Rows,
+	threadID string,
+) (ThreadSnapshot, error) {
 	var snapshot ThreadSnapshot
 	foundThread := false
 	for rows.Next() {

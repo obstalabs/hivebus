@@ -112,6 +112,14 @@ type Thread struct {
 	UpdatedAt    time.Time     `json:"updated_at"`
 }
 
+type PendingClarification struct {
+	TaskMessageID string    `json:"task_message_id"`
+	TaskRequest   Envelope  `json:"task_request"`
+	Request       Envelope  `json:"request"`
+	Expired       bool      `json:"expired"`
+	Deadline      time.Time `json:"deadline"`
+}
+
 // Validate applies the non-negotiable structural guarantees for a thread.
 func (t Thread) Validate() error {
 	switch {
@@ -195,4 +203,89 @@ func (t *Thread) Transition(next ThreadStatus, at time.Time) error {
 	t.UpdatedAt = at
 
 	return nil
+}
+
+func (t Thread) PendingClarification(
+	envelopes []Envelope,
+	now time.Time,
+) (*PendingClarification, error) {
+	if err := t.Validate(); err != nil {
+		return nil, err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	taskRequests := make(map[string]Envelope)
+	clarificationRequests := make(map[string]Envelope)
+	requestOrder := make([]string, 0)
+	resolved := make(map[string]struct{})
+
+	for _, envelope := range envelopes {
+		switch envelope.Type {
+		case MessageTypeTaskRequest:
+			taskRequests[envelope.MessageID] = envelope
+		case MessageTypeClarifyRequest:
+			taskRequest, ok := taskRequests[strings.TrimSpace(envelope.ReplyTo)]
+			if !ok {
+				return nil, errors.New("clarification.request reply_to must match an existing task.request")
+			}
+			if err := envelope.ValidateClarificationRequest(taskRequest); err != nil {
+				return nil, err
+			}
+			clarificationRequests[envelope.MessageID] = envelope
+			requestOrder = append(requestOrder, envelope.MessageID)
+		case MessageTypeClarifyResponse:
+			request, ok := clarificationRequests[strings.TrimSpace(envelope.ReplyTo)]
+			if !ok {
+				return nil, errors.New("clarification.response reply_to must match an existing clarification.request")
+			}
+			taskRequest, ok := taskRequests[strings.TrimSpace(request.ReplyTo)]
+			if !ok {
+				return nil, errors.New("clarification.request reply_to must match an existing task.request")
+			}
+			if err := envelope.ValidateClarificationResponse(taskRequest, request); err != nil {
+				return nil, err
+			}
+			resolved[request.MessageID] = struct{}{}
+		}
+	}
+
+	var pending *PendingClarification
+	for _, requestID := range requestOrder {
+		request := clarificationRequests[requestID]
+		if _, ok := resolved[requestID]; ok {
+			continue
+		}
+		taskRequest := taskRequests[strings.TrimSpace(request.ReplyTo)]
+		if pending != nil {
+			return nil, errors.New("multiple pending clarification requests are not supported")
+		}
+		state := PendingClarification{
+			TaskMessageID: taskRequest.MessageID,
+			TaskRequest:   taskRequest,
+			Request:       request,
+			Deadline:      request.Deadline.UTC(),
+			Expired:       request.Deadline.Before(now),
+		}
+		pending = &state
+	}
+
+	return pending, nil
+}
+
+func (t Thread) HasPendingClarification(
+	taskMessageID string,
+	envelopes []Envelope,
+	now time.Time,
+) (bool, error) {
+	state, err := t.PendingClarification(envelopes, now)
+	if err != nil {
+		return false, err
+	}
+	if state == nil {
+		return false, nil
+	}
+
+	return strings.TrimSpace(state.TaskMessageID) == strings.TrimSpace(taskMessageID), nil
 }

@@ -379,6 +379,21 @@ func (s *Store) CompleteLease(
 	if err != nil {
 		return Lease{}, err
 	}
+	snapshot, err := loadThreadSnapshotTx(ctx, tx, lease.ThreadID)
+	if err != nil {
+		return Lease{}, err
+	}
+	pendingClarification, err := snapshot.Thread.HasPendingClarification(
+		lease.TaskMessageID,
+		snapshot.Envelopes,
+		now,
+	)
+	if err != nil {
+		return Lease{}, err
+	}
+	if pendingClarification {
+		return Lease{}, ErrClarificationPending
+	}
 	if err := result.ValidateTaskResultFinal(request); err != nil {
 		return Lease{}, err
 	}

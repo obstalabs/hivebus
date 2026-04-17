@@ -481,3 +481,111 @@ func TestValidateTaskResultPartRejectsWrongReplyTarget(t *testing.T) {
 		t.Fatal("ValidateTaskResultPart() expected an error")
 	}
 }
+
+func TestValidateClarificationRequestRequiresDeadline(t *testing.T) {
+	t.Helper()
+
+	request := Envelope{
+		MessageID:      "msg_task",
+		ThreadID:       "thr_9",
+		From:           "collector.nullbot",
+		To:             []string{"agent.investigator"},
+		Type:           MessageTypeTaskRequest,
+		Payload:        json.RawMessage(`{"issue":"db down"}`),
+		SentAt:         time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+		IdempotencyKey: "idem_task",
+		Trace: Trace{
+			CorrelationID: "corr_123",
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_task",
+		},
+	}
+	clarification := Envelope{
+		MessageID:      "msg_clarify",
+		ThreadID:       request.ThreadID,
+		From:           "worker.smokevm",
+		To:             []string{request.From},
+		Type:           MessageTypeClarifyRequest,
+		Payload:        json.RawMessage(`{"question":"which release?"}`),
+		ReplyTo:        request.MessageID,
+		SentAt:         request.SentAt.Add(1 * time.Minute),
+		IdempotencyKey: "idem_clarify",
+		Trace: Trace{
+			CorrelationID: request.Trace.CorrelationID,
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_clarify",
+		},
+	}
+
+	if err := clarification.ValidateClarificationRequest(request); err == nil {
+		t.Fatal("ValidateClarificationRequest() expected an error")
+	}
+}
+
+func TestValidateClarificationResponseAcceptsMatchingRequest(t *testing.T) {
+	t.Helper()
+
+	request := Envelope{
+		MessageID:      "msg_task",
+		ThreadID:       "thr_9",
+		From:           "collector.nullbot",
+		To:             []string{"agent.investigator"},
+		Type:           MessageTypeTaskRequest,
+		Payload:        json.RawMessage(`{"issue":"db down"}`),
+		SentAt:         time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+		IdempotencyKey: "idem_task",
+		Trace: Trace{
+			CorrelationID: "corr_123",
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_task",
+		},
+	}
+	deadline := request.SentAt.Add(5 * time.Minute)
+	clarification := Envelope{
+		MessageID:      "msg_clarify",
+		ThreadID:       request.ThreadID,
+		From:           "worker.smokevm",
+		To:             []string{request.From},
+		Type:           MessageTypeClarifyRequest,
+		Payload:        json.RawMessage(`{"question":"which release?"}`),
+		ReplyTo:        request.MessageID,
+		Deadline:       &deadline,
+		SentAt:         request.SentAt.Add(1 * time.Minute),
+		IdempotencyKey: "idem_clarify",
+		Trace: Trace{
+			CorrelationID: request.Trace.CorrelationID,
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_clarify",
+		},
+	}
+	response := Envelope{
+		MessageID:      "msg_answer",
+		ThreadID:       request.ThreadID,
+		From:           "collector.nullbot",
+		To:             []string{"worker.smokevm"},
+		Type:           MessageTypeClarifyResponse,
+		Payload:        json.RawMessage(`{"answer":"v0.17.2"}`),
+		ReplyTo:        clarification.MessageID,
+		SentAt:         request.SentAt.Add(2 * time.Minute),
+		IdempotencyKey: "idem_answer",
+		Trace: Trace{
+			CorrelationID: request.Trace.CorrelationID,
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_answer",
+		},
+	}
+
+	if err := response.ValidateClarificationResponse(request, clarification); err != nil {
+		t.Fatalf("ValidateClarificationResponse() error = %v", err)
+	}
+}
