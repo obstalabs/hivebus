@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/ppiankov/hivebus/internal/model"
@@ -55,6 +56,34 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 
 	if !document.WorkOrderGate["workledger_project_required"] {
 		t.Fatal("expected workledger project gate")
+	}
+
+	if len(document.Authorization.RequiredFields) == 0 {
+		t.Fatal("expected authorization required fields")
+	}
+
+	if len(document.Authorization.RequestClasses) != 3 {
+		t.Fatalf("expected 3 authorization request classes, got %d", len(document.Authorization.RequestClasses))
+	}
+
+	if len(document.Authorization.ApprovalStates) != 4 {
+		t.Fatalf("expected 4 authorization approval states, got %d", len(document.Authorization.ApprovalStates))
+	}
+
+	if len(document.Authorization.RefusalReasons) != 5 {
+		t.Fatalf("expected 5 authorization refusal reasons, got %d", len(document.Authorization.RefusalReasons))
+	}
+
+	if len(document.Authorization.MembershipStates) != 3 {
+		t.Fatalf("expected 3 authorization membership states, got %d", len(document.Authorization.MembershipStates))
+	}
+
+	if len(document.Authorization.DecisionPoints) == 0 {
+		t.Fatal("expected authorization decision points")
+	}
+
+	if len(document.Authorization.Consumers["field_agent"]) == 0 {
+		t.Fatal("expected field agent authorization rules")
 	}
 
 	if len(document.CapabilityLifecycle.MessageTypes) != 9 {
@@ -163,5 +192,20 @@ func TestSampleEdgeRoutingValidatesAllEvents(t *testing.T) {
 				t.Fatalf("Validate(%s) error = %v", envelope.Type, err)
 			}
 		}
+	}
+}
+
+func TestSampleCaseClarificationPayloadUsesStructuredAuthorization(t *testing.T) {
+	t.Helper()
+
+	sample := SampleCase()
+
+	var payload model.ClarificationRequestPayload
+	if err := json.Unmarshal(sample.Messages[1].Payload, &payload); err != nil {
+		t.Fatalf("Unmarshal(clarification payload) error = %v", err)
+	}
+
+	if err := payload.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }

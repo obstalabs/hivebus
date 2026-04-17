@@ -87,6 +87,7 @@ type CapabilityLifecyclePayload struct {
 	Host              string                     `json:"host"`
 	CapabilityID      string                     `json:"capability_id"`
 	CapabilityClass   string                     `json:"capability_class"`
+	Authorization     AuthorizationContext       `json:"authorization"`
 	Version           string                     `json:"version"`
 	Digest            string                     `json:"digest"`
 	ArtifactRef       string                     `json:"artifact_ref,omitempty"`
@@ -135,6 +136,10 @@ func (p CapabilityLifecyclePayload) Validate(eventType MessageType) error {
 		return errors.New("either origin_thread_id or origin_work_order_id is required")
 	case strings.TrimSpace(p.ExpiresAt) == "":
 		return errors.New("expires_at is required")
+	}
+
+	if err := p.Authorization.Validate(AuthorizationRequestCapability); err != nil {
+		return fmt.Errorf("authorization: %w", err)
 	}
 
 	seenEvidence := make(map[string]struct{}, len(p.EvidenceIDs))

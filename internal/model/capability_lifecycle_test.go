@@ -106,9 +106,17 @@ func TestEnvelopeValidateCapabilityLifecycleAcceptsTaskCompleted(t *testing.T) {
 
 func sampleCapabilityLifecyclePayload() CapabilityLifecyclePayload {
 	return CapabilityLifecyclePayload{
-		Host:              "smokevm-arm64",
-		CapabilityID:      "cap_go_test_arm64",
-		CapabilityClass:   "go-testing",
+		Host:            "smokevm-arm64",
+		CapabilityID:    "cap_go_test_arm64",
+		CapabilityClass: "go-testing",
+		Authorization: AuthorizationContext{
+			SenderParticipantID:   "collector.nullbot",
+			ParticipantMembership: ParticipantMembershipThreadParticipant,
+			RequestedScope:        "capability.install.go-testing",
+			RequestClass:          AuthorizationRequestCapability,
+			ApprovalState:         AuthorizationApproved,
+			ExpiresAt:             "2026-04-18T06:00:00Z",
+		},
 		Version:           "1.22.3",
 		Digest:            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ArtifactRef:       "artifact://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

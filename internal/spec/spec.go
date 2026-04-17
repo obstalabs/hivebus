@@ -11,6 +11,7 @@ type Document struct {
 	Version                string                       `json:"version"`
 	Description            string                       `json:"description"`
 	MessageTypes           []model.MessageType          `json:"message_types"`
+	Authorization          AuthorizationContract        `json:"authorization"`
 	EdgeRouting            EdgeRoutingContract          `json:"edge_routing"`
 	CapabilityLifecycle    CapabilityLifecycleContract  `json:"capability_lifecycle"`
 	ThreadStatuses         []model.ThreadStatus         `json:"thread_statuses"`
@@ -43,6 +44,16 @@ type EdgeRoutingContract struct {
 	Consumers     map[string][]string `json:"consumers"`
 }
 
+type AuthorizationContract struct {
+	RequiredFields   []string            `json:"required_fields"`
+	RequestClasses   []string            `json:"request_classes"`
+	ApprovalStates   []string            `json:"approval_states"`
+	RefusalReasons   []string            `json:"refusal_reasons"`
+	MembershipStates []string            `json:"membership_states"`
+	DecisionPoints   []string            `json:"decision_points"`
+	Consumers        map[string][]string `json:"consumers"`
+}
+
 // V0 returns the initial protocol contract for Hivebus.
 func V0() Document {
 	return Document{
@@ -72,6 +83,55 @@ func V0() Document {
 			model.MessageTypeDiagnosisPropose,
 			model.MessageTypeWorkOrderCreate,
 			model.MessageTypeTaskCancel,
+		},
+		Authorization: AuthorizationContract{
+			RequiredFields: []string{
+				"sender_participant_id",
+				"participant_membership",
+				"requested_scope",
+				"request_class",
+				"approval_state",
+				"expires_at",
+				"refusal_reason",
+			},
+			RequestClasses: []string{
+				string(model.AuthorizationRequestClarification),
+				string(model.AuthorizationRequestCapability),
+				string(model.AuthorizationRequestEvidence),
+			},
+			ApprovalStates: []string{
+				string(model.AuthorizationNotRequired),
+				string(model.AuthorizationPending),
+				string(model.AuthorizationApproved),
+				string(model.AuthorizationDenied),
+			},
+			RefusalReasons: []string{
+				string(model.AuthorizationUnauthorizedSender),
+				string(model.AuthorizationScopeMismatch),
+				string(model.AuthorizationExpiredRequest),
+				string(model.AuthorizationForbiddenCapability),
+				string(model.AuthorizationMissingApproval),
+			},
+			MembershipStates: []string{
+				string(model.ParticipantMembershipThreadParticipant),
+				string(model.ParticipantMembershipServiceParticipant),
+				string(model.ParticipantMembershipNonParticipant),
+			},
+			DecisionPoints: []string{
+				"clarification.request",
+				"evidence request",
+				"capability.install.requested",
+			},
+			Consumers: map[string][]string{
+				"field_agent": {
+					"authorize clarification and capability requests from structured sender identity, membership, scope, class, expiry, and approval state",
+					"reject requests structurally when approval_state or refusal_reason says deny",
+				},
+				"policy": {
+					"separate thread-bound authorization from transport reachability",
+					"treat forbidden capability and missing approval as explicit refusal outcomes",
+				},
+			},
 		},
 		EdgeRouting: EdgeRoutingContract{
 			MessageTypes: []model.MessageType{

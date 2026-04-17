@@ -82,8 +82,16 @@ func SampleCase() CaseBundle {
 		panic(err)
 	}
 
-	questionPayload, err := json.Marshal(map[string]string{
-		"question": "Did the incident start after the 07:30 deployment?",
+	questionPayload, err := json.Marshal(model.ClarificationRequestPayload{
+		Question: "Did the incident start after the 07:30 deployment?",
+		Authorization: model.AuthorizationContext{
+			SenderParticipantID:   "agent.investigator",
+			ParticipantMembership: model.ParticipantMembershipThreadParticipant,
+			RequestedScope:        "thread.reply",
+			RequestClass:          model.AuthorizationRequestClarification,
+			ApprovalState:         model.AuthorizationNotRequired,
+			ExpiresAt:             createdAt.Add(30 * time.Minute).Format(time.RFC3339),
+		},
 	})
 	if err != nil {
 		panic(err)
@@ -245,9 +253,17 @@ func SampleCapabilityLifecycle() CapabilityLifecycleSample {
 		approvedBy string,
 	) []byte {
 		payload, err := json.Marshal(model.CapabilityLifecyclePayload{
-			Host:              "smokevm-arm64",
-			CapabilityID:      capabilityID,
-			CapabilityClass:   "go-testing",
+			Host:            "smokevm-arm64",
+			CapabilityID:    capabilityID,
+			CapabilityClass: "go-testing",
+			Authorization: model.AuthorizationContext{
+				SenderParticipantID:   "collector.nullbot",
+				ParticipantMembership: model.ParticipantMembershipThreadParticipant,
+				RequestedScope:        "capability.install.go-testing",
+				RequestClass:          model.AuthorizationRequestCapability,
+				ApprovalState:         model.AuthorizationApproved,
+				ExpiresAt:             baseTime.Add(24 * time.Hour).Format(time.RFC3339),
+			},
 			Version:           "1.22.3",
 			Digest:            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			ArtifactRef:       "artifact://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
