@@ -11,6 +11,7 @@ type Document struct {
 	Version                string                       `json:"version"`
 	Description            string                       `json:"description"`
 	MessageTypes           []model.MessageType          `json:"message_types"`
+	CapabilityLifecycle    CapabilityLifecycleContract  `json:"capability_lifecycle"`
 	ThreadStatuses         []model.ThreadStatus         `json:"thread_statuses"`
 	ArtifactManifestFields []string                     `json:"artifact_manifest_fields"`
 	TierLimits             map[model.Tier]policy.Limits `json:"tier_limits"`
@@ -19,6 +20,12 @@ type Document struct {
 	TrackingSystem         string                       `json:"tracking_system"`
 	OptionalBridge         string                       `json:"optional_bridge,omitempty"`
 	WorkOrderGate          map[string]bool              `json:"work_order_gate"`
+}
+
+type CapabilityLifecycleContract struct {
+	MessageTypes   []model.MessageType `json:"message_types"`
+	RequiredFields []string            `json:"required_fields"`
+	Consumers      map[string][]string `json:"consumers"`
 }
 
 // V0 returns the initial protocol contract for Hivebus.
@@ -34,10 +41,58 @@ func V0() Document {
 			model.MessageTypeTaskResultFinal,
 			model.MessageTypeClarifyRequest,
 			model.MessageTypeClarifyResponse,
+			model.MessageTypeInstallRequested,
+			model.MessageTypeInstallVerified,
+			model.MessageTypeDoctorPassed,
+			model.MessageTypeDoctorFailed,
+			model.MessageTypeCapabilityActive,
+			model.MessageTypeTaskCompleted,
+			model.MessageTypeTeardownRequested,
+			model.MessageTypeTeardownCompleted,
+			model.MessageTypeTeardownFailed,
 			model.MessageTypeEvidenceCaptured,
 			model.MessageTypeDiagnosisPropose,
 			model.MessageTypeWorkOrderCreate,
 			model.MessageTypeTaskCancel,
+		},
+		CapabilityLifecycle: CapabilityLifecycleContract{
+			MessageTypes: []model.MessageType{
+				model.MessageTypeInstallRequested,
+				model.MessageTypeInstallVerified,
+				model.MessageTypeDoctorPassed,
+				model.MessageTypeDoctorFailed,
+				model.MessageTypeCapabilityActive,
+				model.MessageTypeTaskCompleted,
+				model.MessageTypeTeardownRequested,
+				model.MessageTypeTeardownCompleted,
+				model.MessageTypeTeardownFailed,
+			},
+			RequiredFields: []string{
+				"host",
+				"capability_id",
+				"capability_class",
+				"version",
+				"digest",
+				"signer",
+				"requested_by",
+				"approved_by",
+				"origin_thread_id|origin_work_order_id",
+				"evidence_ids",
+				"attestation_state",
+				"task_outcome",
+				"teardown_state",
+				"failure_reason",
+			},
+			Consumers: map[string][]string{
+				"sentinel": {
+					"consume every lifecycle event and explicit failure state without parsing prose",
+					"treat doctor_failed and teardown_failed as terminal failure signals",
+				},
+				"workledger": {
+					"map install_verified, doctor_passed, doctor_failed, capability_active, task_completed, teardown_completed, and teardown_failed into work-order notes or lifecycle state",
+					"never infer attestation or teardown success from missing events",
+				},
+			},
 		},
 		ThreadStatuses: []model.ThreadStatus{
 			model.ThreadStatusReported,

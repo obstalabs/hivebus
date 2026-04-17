@@ -14,16 +14,25 @@ import (
 type MessageType string
 
 const (
-	MessageTypeTaskRequest      MessageType = "task.request"
-	MessageTypeTaskAccepted     MessageType = "task.accepted"
-	MessageTypeTaskResultPart   MessageType = "task.result.partial"
-	MessageTypeTaskResultFinal  MessageType = "task.result.final"
-	MessageTypeClarifyRequest   MessageType = "clarification.request"
-	MessageTypeClarifyResponse  MessageType = "clarification.response"
-	MessageTypeEvidenceCaptured MessageType = "evidence.captured"
-	MessageTypeDiagnosisPropose MessageType = "diagnosis.proposed"
-	MessageTypeWorkOrderCreate  MessageType = "work_order.create"
-	MessageTypeTaskCancel       MessageType = "task.cancel"
+	MessageTypeTaskRequest       MessageType = "task.request"
+	MessageTypeTaskAccepted      MessageType = "task.accepted"
+	MessageTypeTaskResultPart    MessageType = "task.result.partial"
+	MessageTypeTaskResultFinal   MessageType = "task.result.final"
+	MessageTypeClarifyRequest    MessageType = "clarification.request"
+	MessageTypeClarifyResponse   MessageType = "clarification.response"
+	MessageTypeInstallRequested  MessageType = "capability.install.requested"
+	MessageTypeInstallVerified   MessageType = "capability.install.verified"
+	MessageTypeDoctorPassed      MessageType = "capability.doctor.passed"
+	MessageTypeDoctorFailed      MessageType = "capability.doctor.failed"
+	MessageTypeCapabilityActive  MessageType = "capability.active"
+	MessageTypeTaskCompleted     MessageType = "capability.task.completed"
+	MessageTypeTeardownRequested MessageType = "capability.teardown.requested"
+	MessageTypeTeardownCompleted MessageType = "capability.teardown.completed"
+	MessageTypeTeardownFailed    MessageType = "capability.teardown.failed"
+	MessageTypeEvidenceCaptured  MessageType = "evidence.captured"
+	MessageTypeDiagnosisPropose  MessageType = "diagnosis.proposed"
+	MessageTypeWorkOrderCreate   MessageType = "work_order.create"
+	MessageTypeTaskCancel        MessageType = "task.cancel"
 )
 
 var validMessageTypes = []MessageType{
@@ -33,6 +42,15 @@ var validMessageTypes = []MessageType{
 	MessageTypeTaskResultFinal,
 	MessageTypeClarifyRequest,
 	MessageTypeClarifyResponse,
+	MessageTypeInstallRequested,
+	MessageTypeInstallVerified,
+	MessageTypeDoctorPassed,
+	MessageTypeDoctorFailed,
+	MessageTypeCapabilityActive,
+	MessageTypeTaskCompleted,
+	MessageTypeTeardownRequested,
+	MessageTypeTeardownCompleted,
+	MessageTypeTeardownFailed,
 	MessageTypeEvidenceCaptured,
 	MessageTypeDiagnosisPropose,
 	MessageTypeWorkOrderCreate,

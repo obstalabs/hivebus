@@ -52,4 +52,35 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 	if !document.WorkOrderGate["workledger_project_required"] {
 		t.Fatal("expected workledger project gate")
 	}
+
+	if len(document.CapabilityLifecycle.MessageTypes) != 9 {
+		t.Fatalf("expected 9 capability lifecycle message types, got %d", len(document.CapabilityLifecycle.MessageTypes))
+	}
+
+	if len(document.CapabilityLifecycle.RequiredFields) == 0 {
+		t.Fatal("expected capability lifecycle required fields")
+	}
+
+	if len(document.CapabilityLifecycle.Consumers["sentinel"]) == 0 {
+		t.Fatal("expected sentinel capability lifecycle consumer rules")
+	}
+
+	if len(document.CapabilityLifecycle.Consumers["workledger"]) == 0 {
+		t.Fatal("expected workledger capability lifecycle consumer rules")
+	}
+}
+
+func TestSampleCapabilityLifecycleValidatesAllEvents(t *testing.T) {
+	t.Helper()
+
+	sample := SampleCapabilityLifecycle()
+	if len(sample.Messages) != 7 {
+		t.Fatalf("expected 7 capability lifecycle messages, got %d", len(sample.Messages))
+	}
+
+	for _, envelope := range sample.Messages {
+		if err := envelope.ValidateCapabilityLifecycle(); err != nil {
+			t.Fatalf("ValidateCapabilityLifecycle(%s) error = %v", envelope.Type, err)
+		}
+	}
 }

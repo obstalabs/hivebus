@@ -16,6 +16,14 @@ type CaseBundle struct {
 	WorkOrder work.Draft       `json:"work_order"`
 }
 
+type CapabilityLifecycleSample struct {
+	ThreadID     string           `json:"thread_id"`
+	WorkOrderID  string           `json:"work_order_id"`
+	ArtifactID   string           `json:"artifact_id"`
+	CapabilityID string           `json:"capability_id"`
+	Messages     []model.Envelope `json:"messages"`
+}
+
 // SampleCase returns a fully verified sample ready for WO creation.
 func SampleCase() CaseBundle {
 	createdAt := time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC)
@@ -211,5 +219,136 @@ func SampleCase() CaseBundle {
 		Messages:  messages,
 		Diagnosis: diagnosis,
 		WorkOrder: workOrder,
+	}
+}
+
+// SampleCapabilityLifecycle returns a deterministic event stream proving
+// install, verification, use, and teardown of a temporary capability.
+func SampleCapabilityLifecycle() CapabilityLifecycleSample {
+	baseTime := time.Date(2026, 4, 17, 6, 0, 0, 0, time.UTC)
+	threadID := "thr_capability_smokevm"
+	workOrderID := "WO-167"
+	artifactID := "art_capability_receipt"
+	capabilityID := "cap_go_test_arm64"
+
+	buildPayload := func(
+		attestation model.CapabilityAttestationState,
+		task model.CapabilityTaskOutcome,
+		teardown model.CapabilityTeardownState,
+		failure string,
+		approvedBy string,
+	) []byte {
+		payload, err := json.Marshal(model.CapabilityLifecyclePayload{
+			Host:              "smokevm-arm64",
+			CapabilityID:      capabilityID,
+			CapabilityClass:   "go-testing",
+			Version:           "1.22.3",
+			Digest:            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Signer:            "buildkite-release",
+			RequestedBy:       "collector.nullbot",
+			ApprovedBy:        approvedBy,
+			OriginThreadID:    threadID,
+			OriginWorkOrderID: workOrderID,
+			EvidenceIDs:       []string{artifactID},
+			AttestationState:  attestation,
+			TaskOutcome:       task,
+			TeardownState:     teardown,
+			FailureReason:     failure,
+		})
+		if err != nil {
+			panic(err)
+		}
+		return payload
+	}
+
+	envelope := func(
+		messageID string,
+		eventType model.MessageType,
+		payload []byte,
+		sentAt time.Time,
+	) model.Envelope {
+		return model.Envelope{
+			MessageID:      messageID,
+			ThreadID:       threadID,
+			From:           "service.edge-installer",
+			To:             []string{"service.sentinel"},
+			Type:           eventType,
+			Payload:        payload,
+			ArtifactIDs:    []string{artifactID},
+			SentAt:         sentAt,
+			IdempotencyKey: "idem_" + messageID,
+			Trace: model.Trace{
+				CorrelationID: "corr_" + threadID,
+				SpanID:        "span_" + messageID,
+				Model:         "installer.local",
+				Verified:      true,
+			},
+			Security: model.Security{
+				Scheme:    "ed25519",
+				Nonce:     "nonce_" + messageID,
+				Signature: "sig_" + messageID,
+				Signed:    true,
+			},
+		}
+	}
+
+	messages := []model.Envelope{
+		envelope("msg_cap_001", model.MessageTypeInstallRequested, buildPayload(
+			model.CapabilityAttestationRequested,
+			"",
+			"",
+			"",
+			"",
+		), baseTime),
+		envelope("msg_cap_002", model.MessageTypeInstallVerified, buildPayload(
+			model.CapabilityAttestationVerified,
+			"",
+			"",
+			"",
+			"operator.pavel",
+		), baseTime.Add(1*time.Minute)),
+		envelope("msg_cap_003", model.MessageTypeDoctorPassed, buildPayload(
+			model.CapabilityAttestationDoctorPassed,
+			"",
+			"",
+			"",
+			"operator.pavel",
+		), baseTime.Add(2*time.Minute)),
+		envelope("msg_cap_004", model.MessageTypeCapabilityActive, buildPayload(
+			model.CapabilityAttestationActive,
+			"",
+			"",
+			"",
+			"operator.pavel",
+		), baseTime.Add(3*time.Minute)),
+		envelope("msg_cap_005", model.MessageTypeTaskCompleted, buildPayload(
+			model.CapabilityAttestationActive,
+			model.CapabilityTaskSucceeded,
+			"",
+			"",
+			"operator.pavel",
+		), baseTime.Add(4*time.Minute)),
+		envelope("msg_cap_006", model.MessageTypeTeardownRequested, buildPayload(
+			model.CapabilityAttestationActive,
+			"",
+			model.CapabilityTeardownRequested,
+			"",
+			"operator.pavel",
+		), baseTime.Add(5*time.Minute)),
+		envelope("msg_cap_007", model.MessageTypeTeardownCompleted, buildPayload(
+			model.CapabilityAttestationActive,
+			"",
+			model.CapabilityTeardownCompleted,
+			"",
+			"operator.pavel",
+		), baseTime.Add(6*time.Minute)),
+	}
+
+	return CapabilityLifecycleSample{
+		ThreadID:     threadID,
+		WorkOrderID:  workOrderID,
+		ArtifactID:   artifactID,
+		CapabilityID: capabilityID,
+		Messages:     messages,
 	}
 }
