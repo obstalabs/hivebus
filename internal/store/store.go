@@ -230,6 +230,20 @@ func (s *Store) LoadThread(ctx context.Context, threadID string) (ThreadSnapshot
 				return ThreadSnapshot{}, errors.New("lease receipt thread_id does not match replay target")
 			}
 			snapshot.LeaseReceipts = append(snapshot.LeaseReceipts, receipt)
+		case eventKindArtifactRecorded:
+			var artifact model.Artifact
+			if err := json.Unmarshal(payload, &artifact); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("unmarshal artifact event: %w", err)
+			}
+			if err := artifact.Validate(); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("invalid artifact event: %w", err)
+			}
+			for _, existing := range snapshot.Thread.Evidence {
+				if existing.ArtifactID == artifact.ArtifactID {
+					return ThreadSnapshot{}, fmt.Errorf("duplicate artifact event %q", artifact.ArtifactID)
+				}
+			}
+			snapshot.Thread.Evidence = append(snapshot.Thread.Evidence, artifact)
 		default:
 			return ThreadSnapshot{}, fmt.Errorf("unsupported event kind %q", eventKind)
 		}

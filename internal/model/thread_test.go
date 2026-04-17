@@ -164,11 +164,37 @@ func TestThreadValidateRejectsMissingRequiredFields(t *testing.T) {
 		func() Thread {
 			sample := base
 			sample.Evidence = []Artifact{{
-				ArtifactID: "art_1",
-				Kind:       "log",
-				URI:        "s3://example/log.txt",
-				SHA256:     "abc123",
+				ArtifactID:  "art_1",
+				Name:        "log.txt",
+				Kind:        "log",
+				URI:         "s3://example/log.txt",
+				SHA256:      "short-digest",
+				ContentType: "text/plain",
 			}}
+			return sample
+		}(),
+		func() Thread {
+			sample := base
+			sample.Evidence = []Artifact{
+				{
+					ArtifactID:  "art_1",
+					Name:        "log.txt",
+					Kind:        "log",
+					URI:         "s3://example/log.txt",
+					SHA256:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					SizeBytes:   1,
+					ContentType: "text/plain",
+				},
+				{
+					ArtifactID:  "art_1",
+					Name:        "other.txt",
+					Kind:        "log",
+					URI:         "s3://example/other.txt",
+					SHA256:      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					SizeBytes:   2,
+					ContentType: "text/plain",
+				},
+			}
 			return sample
 		}(),
 	}

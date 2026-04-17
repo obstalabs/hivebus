@@ -77,11 +77,6 @@ func (ks *KeyStore) Lookup(rawToken string) *TokenEntry {
 	return ks.keys[HashToken(rawToken)]
 }
 
-func tokenFromContext(ctx context.Context) *TokenEntry {
-	entry, _ := ctx.Value(tokenEntryContextKey).(*TokenEntry)
-	return entry
-}
-
 func withAuth(ks *KeyStore, required Role, next http.HandlerFunc) http.HandlerFunc {
 	if ks == nil {
 		return next

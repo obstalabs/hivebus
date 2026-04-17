@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ppiankov/hivebus/internal/artifact"
 	"github.com/ppiankov/hivebus/internal/model"
 	"github.com/ppiankov/hivebus/internal/store"
 )
@@ -17,7 +18,7 @@ func TestThreadLifecycleOverHTTP(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st, nil)
+	handler := NewHandler(st, openTestArtifactStore(t), nil)
 
 	thread := sampleThread()
 	threadBody, err := json.Marshal(thread)
@@ -78,7 +79,7 @@ func TestAppendEnvelopeRejectsThreadPathMismatch(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st, nil)
+	handler := NewHandler(st, openTestArtifactStore(t), nil)
 
 	thread := sampleThread()
 	mustSeedThread(t, st, thread)
@@ -107,7 +108,7 @@ func TestHealthzReportsStoreAvailability(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st, nil)
+	handler := NewHandler(st, openTestArtifactStore(t), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -129,6 +130,17 @@ func openTestStore(t *testing.T) *store.Store {
 	t.Cleanup(func() {
 		_ = st.Close()
 	})
+
+	return st
+}
+
+func openTestArtifactStore(t *testing.T) *artifact.Store {
+	t.Helper()
+
+	st, err := artifact.Open(filepath.Join(t.TempDir(), "artifacts"))
+	if err != nil {
+		t.Fatalf("artifact.Open() error = %v", err)
+	}
 
 	return st
 }

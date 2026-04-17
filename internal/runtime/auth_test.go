@@ -13,7 +13,7 @@ func TestAuthAllowsWorkerOnWorkerEndpointsOnly(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	pollBody := marshalJSON(t, workerPollRequest{WorkerID: "worker.smokevm"})
 	pollReq := httptest.NewRequest(http.MethodPost, "/v0/workers/poll", bytes.NewReader(pollBody))
@@ -39,7 +39,7 @@ func TestAuthRequiresValidBearerToken(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	req := httptest.NewRequest(http.MethodGet, "/v0/threads/thr_123", nil)
 	rec := httptest.NewRecorder()
@@ -54,7 +54,7 @@ func TestOperatorCanAccessThreadEndpoints(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	thread := sampleThread()
 	body := marshalJSON(t, thread)

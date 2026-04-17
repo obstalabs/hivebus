@@ -13,7 +13,7 @@ func TestLeaseRenewAndCompleteOverHTTP(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st, nil)
+	handler := NewHandler(st, openTestArtifactStore(t), nil)
 
 	thread := sampleThread()
 	mustCreateThread(t, handler, thread)
@@ -96,7 +96,7 @@ func TestLeaseCompleteRejectsDuplicateCompletion(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st, nil)
+	handler := NewHandler(st, openTestArtifactStore(t), nil)
 
 	thread := sampleThread()
 	mustCreateThread(t, handler, thread)

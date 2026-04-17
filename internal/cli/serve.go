@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ppiankov/hivebus/internal/artifact"
 	"github.com/ppiankov/hivebus/internal/runtime"
 	"github.com/ppiankov/hivebus/internal/store"
 	"github.com/spf13/cobra"
@@ -20,6 +21,7 @@ const shutdownTimeout = 10 * time.Second
 func newServeCommand() *cobra.Command {
 	var listenAddr string
 	var dbPath string
+	var artifactsDir string
 	var tokensFile string
 	var authDisabled bool
 
@@ -30,13 +32,25 @@ func newServeCommand() *cobra.Command {
 			if dbPath == "" {
 				dbPath = filepath.Join(".", ".hivebus", "events.db")
 			}
+			if artifactsDir == "" {
+				artifactsDir = filepath.Join(".", ".hivebus", "artifacts")
+			}
 
-			return runServe(cmd.Context(), cmd.OutOrStdout(), listenAddr, dbPath, tokensFile, authDisabled)
+			return runServe(
+				cmd.Context(),
+				cmd.OutOrStdout(),
+				listenAddr,
+				dbPath,
+				artifactsDir,
+				tokensFile,
+				authDisabled,
+			)
 		},
 	}
 
 	cmd.Flags().StringVar(&listenAddr, "listen", "127.0.0.1:7081", "Listen address for the HTTP runtime")
 	cmd.Flags().StringVar(&dbPath, "db", "", "Path to the SQLite event log")
+	cmd.Flags().StringVar(&artifactsDir, "artifacts-dir", "", "Path to the local artifact store")
 	cmd.Flags().StringVar(&tokensFile, "tokens-file", "", "Path to a JSON file containing hashed operator and worker tokens")
 	cmd.Flags().BoolVar(&authDisabled, "auth-disabled", false, "Disable runtime auth explicitly for local development")
 
@@ -48,6 +62,7 @@ func runServe(
 	out io.Writer,
 	listenAddr string,
 	dbPath string,
+	artifactsDir string,
 	tokensFile string,
 	authDisabled bool,
 ) error {
@@ -59,12 +74,17 @@ func runServe(
 		_ = st.Close()
 	}()
 
+	artifacts, err := artifact.Open(artifactsDir)
+	if err != nil {
+		return err
+	}
+
 	keys, err := loadKeyStore(tokensFile, authDisabled)
 	if err != nil {
 		return err
 	}
 
-	handler := runtime.NewHandler(st, keys)
+	handler := runtime.NewHandler(st, artifacts, keys)
 
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {

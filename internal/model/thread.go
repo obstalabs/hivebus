@@ -149,10 +149,15 @@ func (t Thread) Validate() error {
 		seenParticipants[participantID] = struct{}{}
 	}
 
+	seenArtifacts := make(map[string]struct{}, len(t.Evidence))
 	for _, artifact := range t.Evidence {
 		if err := artifact.Validate(); err != nil {
 			return fmt.Errorf("invalid evidence: %w", err)
 		}
+		if _, exists := seenArtifacts[artifact.ArtifactID]; exists {
+			return fmt.Errorf("duplicate evidence artifact %q", artifact.ArtifactID)
+		}
+		seenArtifacts[artifact.ArtifactID] = struct{}{}
 	}
 
 	return nil

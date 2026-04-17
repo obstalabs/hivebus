@@ -41,6 +41,10 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 		t.Fatal("expected community feature boundary")
 	}
 
+	if len(document.ArtifactManifestFields) != 3 {
+		t.Fatalf("expected artifact manifest fields, got %#v", document.ArtifactManifestFields)
+	}
+
 	if document.FeatureBoundary.Workledger.ProjectSelection == "" {
 		t.Fatal("expected workledger project selection strategy")
 	}

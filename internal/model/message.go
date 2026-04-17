@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -74,13 +75,14 @@ type Envelope struct {
 
 // Artifact stores evidence metadata without inlining unbounded blobs into the thread.
 type Artifact struct {
-	ArtifactID string `json:"artifact_id"`
-	Name       string `json:"name"`
-	Kind       string `json:"kind"`
-	URI        string `json:"uri"`
-	SHA256     string `json:"sha256"`
-	SizeBytes  int64  `json:"size_bytes"`
-	Redacted   bool   `json:"redacted"`
+	ArtifactID  string `json:"artifact_id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	URI         string `json:"uri"`
+	SHA256      string `json:"sha256"`
+	SizeBytes   int64  `json:"size_bytes"`
+	ContentType string `json:"content_type"`
+	Redacted    bool   `json:"redacted"`
 }
 
 // Validate applies structural checks that must hold before any routing.
@@ -130,6 +132,18 @@ func (e Envelope) Validate() error {
 		seen[recipient] = struct{}{}
 	}
 
+	seenArtifactIDs := make(map[string]struct{}, len(e.ArtifactIDs))
+	for _, artifactID := range e.ArtifactIDs {
+		artifactID = strings.TrimSpace(artifactID)
+		if artifactID == "" {
+			return errors.New("artifact_ids contains an empty artifact id")
+		}
+		if _, exists := seenArtifactIDs[artifactID]; exists {
+			return fmt.Errorf("duplicate artifact id %q", artifactID)
+		}
+		seenArtifactIDs[artifactID] = struct{}{}
+	}
+
 	return nil
 }
 
@@ -148,9 +162,39 @@ func (a Artifact) Validate() error {
 		return errors.New("sha256 is required")
 	case a.SizeBytes < 0:
 		return errors.New("size_bytes must be zero or positive")
+	case strings.TrimSpace(a.ContentType) == "":
+		return errors.New("content_type is required")
+	case !strings.Contains(a.ContentType, "/"):
+		return errors.New("content_type must be a media type")
+	case !IsSHA256Hex(a.SHA256):
+		return errors.New("sha256 must be a 64-character lowercase hex digest")
 	}
 
 	return nil
+}
+
+func DefaultContentType(body []byte) string {
+	if len(body) == 0 {
+		return "application/octet-stream"
+	}
+
+	return http.DetectContentType(body)
+}
+
+func IsSHA256Hex(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 // ValidateTaskRequest applies runtime checks for a claimable task envelope.

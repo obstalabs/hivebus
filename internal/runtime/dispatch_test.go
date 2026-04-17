@@ -14,7 +14,7 @@ func TestDispatchCreatesClaimableTaskForTargetWorker(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	dispatchBody := marshalJSON(t, dispatchRequest{
 		Title:  "Smoke test neurorouter release",
@@ -81,7 +81,7 @@ func TestDispatchSignalCreatesStructuredIntentAndClaimableTask(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	dispatchBody := marshalJSON(t, dispatchRequest{
 		Signal: "[hivebus] worker.smokevm do smoke testing for new release of neurorouter",
@@ -140,7 +140,7 @@ func TestDispatchSignalParsesExtendedForm(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	dispatchBody := marshalJSON(t, dispatchRequest{
 		Signal: "[hivebus] worker.reviewer | review the changes in obstalabs-site and suggest improvements | repo=obstalabs-site | priority=high, timeout=10m",
@@ -181,7 +181,7 @@ func TestDispatchCreatesClaimableTaskForCapabilityWorker(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	dispatchBody := marshalJSON(t, dispatchRequest{
 		Title:      "Review runtime auth",
@@ -231,7 +231,7 @@ func TestDispatchRejectsAmbiguousTargeting(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	dispatchBody := marshalJSON(t, dispatchRequest{
 		Title:      "Bad dispatch",
@@ -258,7 +258,7 @@ func TestDispatchSignalRejectsMixedMode(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	dispatchBody := marshalJSON(t, dispatchRequest{
 		Signal: "[hivebus] worker.smokevm run smoke tests",
@@ -283,7 +283,7 @@ func TestDispatchSignalRejectsUnsupportedSchedulerAlias(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	dispatchBody := marshalJSON(t, dispatchRequest{
 		Signal: "[hivebus] @best fix failing tests",
@@ -307,7 +307,7 @@ func TestDispatchResumeCapsuleForQueuedTask(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	threadID := mustDispatchTask(t, handler, dispatchRequest{
 		Title:  "Re-run smoke lane",
@@ -355,7 +355,7 @@ func TestDispatchResumeCapsuleIncludesStructuredIntent(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	threadID := mustDispatchTask(t, handler, dispatchRequest{
 		Signal: "[hivebus] worker.smokevm do smoke testing for new release of neurorouter",
@@ -387,7 +387,7 @@ func TestDispatchResumeCapsuleForCompletedTask(t *testing.T) {
 
 	st := openTestStore(t)
 	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, keys)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	threadID, taskMessageID := mustDispatchTaskWithMessageID(t, handler, dispatchRequest{
 		Title:      "Review auth handlers",

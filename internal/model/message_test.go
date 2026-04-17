@@ -101,12 +101,13 @@ func TestArtifactValidateRejectsNegativeSize(t *testing.T) {
 	t.Helper()
 
 	artifact := Artifact{
-		ArtifactID: "art_1",
-		Name:       "log.txt",
-		Kind:       "log",
-		URI:        "s3://example/log.txt",
-		SHA256:     "abc123",
-		SizeBytes:  -1,
+		ArtifactID:  "art_1",
+		Name:        "log.txt",
+		Kind:        "log",
+		URI:         "s3://example/log.txt",
+		SHA256:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		SizeBytes:   -1,
+		ContentType: "text/plain",
 	}
 
 	if err := artifact.Validate(); err == nil {
@@ -224,17 +225,58 @@ func TestArtifactValidateRejectsMissingRequiredFields(t *testing.T) {
 	t.Helper()
 
 	testCases := []Artifact{
-		{Name: "log.txt", Kind: "log", URI: "s3://example/log.txt", SHA256: "abc123"},
-		{ArtifactID: "art_1", Kind: "log", URI: "s3://example/log.txt", SHA256: "abc123"},
-		{ArtifactID: "art_1", Name: "log.txt", URI: "s3://example/log.txt", SHA256: "abc123"},
-		{ArtifactID: "art_1", Name: "log.txt", Kind: "log", SHA256: "abc123"},
-		{ArtifactID: "art_1", Name: "log.txt", Kind: "log", URI: "s3://example/log.txt"},
+		{Name: "log.txt", Kind: "log", URI: "s3://example/log.txt", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ContentType: "text/plain"},
+		{ArtifactID: "art_1", Kind: "log", URI: "s3://example/log.txt", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ContentType: "text/plain"},
+		{ArtifactID: "art_1", Name: "log.txt", URI: "s3://example/log.txt", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ContentType: "text/plain"},
+		{ArtifactID: "art_1", Name: "log.txt", Kind: "log", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ContentType: "text/plain"},
+		{ArtifactID: "art_1", Name: "log.txt", Kind: "log", URI: "s3://example/log.txt", ContentType: "text/plain"},
+		{ArtifactID: "art_1", Name: "log.txt", Kind: "log", URI: "s3://example/log.txt", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{ArtifactID: "art_1", Name: "log.txt", Kind: "log", URI: "s3://example/log.txt", SHA256: "short", ContentType: "text/plain"},
+		{ArtifactID: "art_1", Name: "log.txt", Kind: "log", URI: "s3://example/log.txt", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ContentType: "plain"},
 	}
 
 	for _, artifact := range testCases {
 		if err := artifact.Validate(); err == nil {
 			t.Fatalf("Validate() expected an error for %#v", artifact)
 		}
+	}
+}
+
+func TestEnvelopeValidateRejectsDuplicateArtifactIDs(t *testing.T) {
+	t.Helper()
+
+	envelope := Envelope{
+		MessageID:      "msg_123",
+		ThreadID:       "thr_9",
+		From:           "collector.nullbot",
+		To:             []string{"agent.investigator"},
+		Type:           MessageTypeTaskRequest,
+		Payload:        json.RawMessage(`{"issue":"db down"}`),
+		ArtifactIDs:    []string{"art_1", "art_1"},
+		SentAt:         time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC),
+		IdempotencyKey: "idem_123",
+		Trace: Trace{
+			CorrelationID: "corr_123",
+		},
+		Security: Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_123",
+		},
+	}
+
+	if err := envelope.Validate(); err == nil {
+		t.Fatal("Validate() expected an error")
+	}
+}
+
+func TestDefaultContentTypeUsesHTTPDetection(t *testing.T) {
+	t.Helper()
+
+	if got := DefaultContentType([]byte("hello")); got != "text/plain; charset=utf-8" {
+		t.Fatalf("DefaultContentType(text) = %q", got)
+	}
+	if got := DefaultContentType(nil); got != "application/octet-stream" {
+		t.Fatalf("DefaultContentType(empty) = %q", got)
 	}
 }
 

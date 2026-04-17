@@ -75,12 +75,13 @@ func TestValidateEnvelopeAcceptsEnterprisePolicy(t *testing.T) {
 
 	artifacts := []model.Artifact{
 		{
-			ArtifactID: "art_1",
-			Name:       "logs.txt",
-			Kind:       "log",
-			URI:        "s3://example/logs.txt",
-			SHA256:     "abc123",
-			SizeBytes:  1024,
+			ArtifactID:  "art_1",
+			Name:        "logs.txt",
+			Kind:        "log",
+			URI:         "artifact://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			SHA256:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			SizeBytes:   1024,
+			ContentType: "text/plain",
 		},
 	}
 

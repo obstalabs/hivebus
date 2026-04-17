@@ -15,7 +15,7 @@ func TestWorkerPollAndClaimOverHTTP(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st, nil)
+	handler := NewHandler(st, openTestArtifactStore(t), nil)
 
 	thread := sampleThread()
 	mustCreateThread(t, handler, thread)
@@ -70,7 +70,7 @@ func TestWorkerClaimRejectsSecondActiveLease(t *testing.T) {
 	t.Helper()
 
 	st := openTestStore(t)
-	handler := NewHandler(st, nil)
+	handler := NewHandler(st, openTestArtifactStore(t), nil)
 
 	thread := sampleThread()
 	mustCreateThread(t, handler, thread)

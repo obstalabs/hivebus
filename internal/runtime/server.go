@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ppiankov/hivebus/internal/artifact"
 	"github.com/ppiankov/hivebus/internal/model"
 	"github.com/ppiankov/hivebus/internal/store"
 )
@@ -23,17 +24,20 @@ type appendEnvelopeResponse struct {
 }
 
 type server struct {
-	store *store.Store
+	store     *store.Store
+	artifacts *artifact.Store
 }
 
-func NewHandler(st *store.Store, keys *KeyStore) http.Handler {
-	srv := &server{store: st}
+func NewHandler(st *store.Store, artifacts *artifact.Store, keys *KeyStore) http.Handler {
+	srv := &server{store: st, artifacts: artifacts}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", srv.handleHealthz)
 	mux.HandleFunc("POST /v0/dispatch", withAuth(keys, RoleOperator, srv.handleDispatch))
 	mux.HandleFunc("GET /v0/dispatch/{threadID}/resume", withAuth(keys, RoleOperator, srv.handleDispatchResume))
+	mux.HandleFunc("GET /v0/artifacts/{sha256}", withAuth(keys, RoleWorker, srv.handleGetArtifact))
 	mux.HandleFunc("POST /v0/threads", withAuth(keys, RoleOperator, srv.handleCreateThread))
 	mux.HandleFunc("GET /v0/threads/{threadID}", withAuth(keys, RoleOperator, srv.handleGetThread))
+	mux.HandleFunc("POST /v0/threads/{threadID}/artifacts", withAuth(keys, RoleWorker, srv.handlePutArtifact))
 	mux.HandleFunc("POST /v0/threads/{threadID}/messages", withAuth(keys, RoleOperator, srv.handleAppendEnvelope))
 	mux.HandleFunc("POST /v0/workers/poll", withAuth(keys, RoleWorker, srv.handleWorkerPoll))
 	mux.HandleFunc("POST /v0/workers/claim", withAuth(keys, RoleWorker, srv.handleWorkerClaim))
@@ -153,6 +157,7 @@ func isInputError(err error) bool {
 		strings.Contains(lower, "unsupported") ||
 		strings.Contains(lower, "duplicate") ||
 		strings.Contains(lower, "deadline must") ||
+		strings.Contains(lower, "must be a") ||
 		strings.Contains(lower, "must match") ||
 		strings.Contains(lower, "must be positive") ||
 		strings.Contains(lower, "transition") ||
