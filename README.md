@@ -126,7 +126,7 @@ Current code layout:
 
 - `cmd/hivebus`: minimal CLI entrypoint
 - `internal/model`: envelopes, threads, artifacts, diagnoses
-- `internal/runtime`: v0 HTTP handlers for thread creation, append, and replay
+- `internal/runtime`: v0 HTTP handlers for intake, promotion, dispatch, thread creation, append, and replay
 - `internal/policy`: free, pro, teams, enterprise limits
 - `internal/spec`: exported v0 contract and sample case bundle
 - `internal/store`: SQLite append-only event log and deterministic replay
@@ -162,17 +162,18 @@ Adaptive Optimization is also paid-only. It is the background intelligence layer
 
 ## Known Limitations
 
-- The v0 runtime is HTTP-only and intentionally small: create thread, append envelope, replay thread.
+- The v0 runtime is HTTP-only and intentionally small: nullbot intake, thread promotion, dispatch, append, and replay.
 - Envelope signatures are represented structurally but not cryptographically verified yet.
-- The runtime does not yet persist verified diagnoses into `workledger` or hand execution off to `hiveram`.
+- The workledger bridge requires explicit `WORKLEDGER_URL` or `WORKLEDGER_HOST` plus `WORKLEDGER_API_KEY` configuration on the runtime host.
+- Optional `hiveram.com` sync is exposed as a hook surface, not a bundled free-runtime integration.
 - Capability routing is still declarative rather than runtime-driven.
-- There is no operator or worker auth on the runtime yet.
+- Runtime auth now exists for operator and worker tokens, but it is still local-token based rather than org/hosted identity aware.
 
 ## Roadmap
 
 - Add signed envelope verification and nonce replay protection.
-- Add nullbot intake adapters and follow-up question exchange.
-- Add workledger persistence and optional Hiveram execution integration.
+- Add additional nullbot intake adapters beyond the v0 HTTP path.
+- Extend the workledger bridge with richer search/update/note flows and keep optional Hiveram execution integration in `hivebus-pro`.
 - Keep non-free runtime surfaces in `hivebus-pro` instead of mixing them into this repo.
 - Add queue-backed and realtime transports without changing protocol shape.
 

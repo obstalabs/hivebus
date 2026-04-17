@@ -18,6 +18,7 @@ import (
 const (
 	sqliteDriver              = "sqlite"
 	eventKindThreadCreated    = "thread.created"
+	eventKindThreadTransition = "thread.transitioned"
 	eventKindEnvelopeAppended = "envelope.appended"
 )
 
@@ -216,6 +217,20 @@ func loadThreadSnapshotRows(
 				return ThreadSnapshot{}, fmt.Errorf("invalid thread event: %w", err)
 			}
 			foundThread = true
+		case eventKindThreadTransition:
+			var transition ThreadTransitionEvent
+			if err := json.Unmarshal(payload, &transition); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("unmarshal thread transition event: %w", err)
+			}
+			if err := transition.Validate(); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("invalid thread transition event: %w", err)
+			}
+			if !foundThread {
+				return ThreadSnapshot{}, errors.New("thread transition seen before thread.created event")
+			}
+			if err := snapshot.Thread.Transition(transition.Status, transition.UpdatedAt); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("apply thread transition event: %w", err)
+			}
 		case eventKindEnvelopeAppended:
 			var envelope model.Envelope
 			if err := json.Unmarshal(payload, &envelope); err != nil {

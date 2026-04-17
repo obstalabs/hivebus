@@ -24,19 +24,37 @@ type appendEnvelopeResponse struct {
 }
 
 type server struct {
-	store     *store.Store
-	artifacts *artifact.Store
+	store      *store.Store
+	artifacts  *artifact.Store
+	workOrders WorkOrderBridge
+	syncHooks  map[string]ExecutionSyncHook
 }
 
 func NewHandler(st *store.Store, artifacts *artifact.Store, keys *KeyStore) http.Handler {
-	srv := &server{store: st, artifacts: artifacts}
+	return NewHandlerWithOptions(st, artifacts, keys, HandlerOptions{})
+}
+
+func NewHandlerWithOptions(
+	st *store.Store,
+	artifacts *artifact.Store,
+	keys *KeyStore,
+	options HandlerOptions,
+) http.Handler {
+	srv := &server{
+		store:      st,
+		artifacts:  artifacts,
+		workOrders: options.WorkOrders,
+		syncHooks:  options.SyncHooks,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", srv.handleHealthz)
+	mux.HandleFunc("POST /v0/intake/nullbot", withAuth(keys, RoleOperator, srv.handleNullbotIntake))
 	mux.HandleFunc("POST /v0/dispatch", withAuth(keys, RoleOperator, srv.handleDispatch))
 	mux.HandleFunc("GET /v0/dispatch/{threadID}/resume", withAuth(keys, RoleOperator, srv.handleDispatchResume))
 	mux.HandleFunc("GET /v0/artifacts/{sha256}", withAuth(keys, RoleWorker, srv.handleGetArtifact))
 	mux.HandleFunc("POST /v0/threads", withAuth(keys, RoleOperator, srv.handleCreateThread))
 	mux.HandleFunc("GET /v0/threads/{threadID}", withAuth(keys, RoleOperator, srv.handleGetThread))
+	mux.HandleFunc("POST /v0/threads/{threadID}/promote", withAuth(keys, RoleOperator, srv.handlePromoteThread))
 	mux.HandleFunc("POST /v0/threads/{threadID}/clarifications/response", withAuth(keys, RoleOperator, srv.handleClarificationResponse))
 	mux.HandleFunc("GET /v0/threads/{threadID}/watch", withAuth(keys, RoleWorker, srv.handleWatchThread))
 	mux.HandleFunc("POST /v0/threads/{threadID}/artifacts", withAuth(keys, RoleWorker, srv.handlePutArtifact))

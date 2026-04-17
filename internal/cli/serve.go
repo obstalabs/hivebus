@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ppiankov/hivebus/internal/artifact"
@@ -84,7 +85,19 @@ func runServe(
 		return err
 	}
 
-	handler := runtime.NewHandler(st, artifacts, keys)
+	workOrders, err := loadWorkOrderBridgeFromEnv()
+	if err != nil {
+		return err
+	}
+
+	handler := runtime.NewHandlerWithOptions(
+		st,
+		artifacts,
+		keys,
+		runtime.HandlerOptions{
+			WorkOrders: workOrders,
+		},
+	)
 
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -130,6 +143,24 @@ func runServe(
 		}
 		return err
 	}
+}
+
+func loadWorkOrderBridgeFromEnv() (runtime.WorkOrderBridge, error) {
+	apiKey := strings.TrimSpace(os.Getenv("WORKLEDGER_API_KEY"))
+	if apiKey == "" {
+		return nil, nil
+	}
+
+	baseURL := strings.TrimSpace(os.Getenv("WORKLEDGER_URL"))
+	if baseURL == "" {
+		host := strings.TrimSpace(os.Getenv("WORKLEDGER_HOST"))
+		if host == "" {
+			return nil, errors.New("WORKLEDGER_API_KEY requires WORKLEDGER_URL or WORKLEDGER_HOST")
+		}
+		baseURL = "https://" + host + "/api/v1"
+	}
+
+	return runtime.NewWorkledgerHTTPBridge(baseURL, apiKey)
 }
 
 func loadKeyStore(tokensFile string, authDisabled bool) (*runtime.KeyStore, error) {
