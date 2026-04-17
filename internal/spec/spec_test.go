@@ -1,6 +1,10 @@
 package spec
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ppiankov/hivebus/internal/model"
+)
 
 func TestSampleCaseBuildsWorkOrderForSameThread(t *testing.T) {
 	t.Helper()
@@ -84,6 +88,38 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 	if len(document.CapabilityLifecycle.Consumers["policy"]) == 0 {
 		t.Fatal("expected policy capability lifecycle consumer rules")
 	}
+
+	if len(document.EdgeRouting.MessageTypes) != 3 {
+		t.Fatalf("expected 3 edge routing message types, got %d", len(document.EdgeRouting.MessageTypes))
+	}
+
+	if len(document.EdgeRouting.SessionFields) == 0 {
+		t.Fatal("expected edge routing session fields")
+	}
+
+	if len(document.EdgeRouting.ReceiptFields) == 0 {
+		t.Fatal("expected edge routing receipt fields")
+	}
+
+	if len(document.EdgeRouting.DeliveryModes) != 2 {
+		t.Fatalf("expected 2 edge routing delivery modes, got %d", len(document.EdgeRouting.DeliveryModes))
+	}
+
+	if len(document.EdgeRouting.SessionStates) != 3 {
+		t.Fatalf("expected 3 edge routing session states, got %d", len(document.EdgeRouting.SessionStates))
+	}
+
+	if len(document.EdgeRouting.ReceiptStates) != 4 {
+		t.Fatalf("expected 4 edge routing receipt states, got %d", len(document.EdgeRouting.ReceiptStates))
+	}
+
+	if document.EdgeRouting.RoutingRule == "" {
+		t.Fatal("expected edge routing rule")
+	}
+
+	if len(document.EdgeRouting.Consumers["hivebus"]) == 0 {
+		t.Fatal("expected hivebus edge routing consumer rules")
+	}
 }
 
 func TestSampleCapabilityLifecycleValidatesAllEvents(t *testing.T) {
@@ -97,6 +133,35 @@ func TestSampleCapabilityLifecycleValidatesAllEvents(t *testing.T) {
 	for _, envelope := range sample.Messages {
 		if err := envelope.ValidateCapabilityLifecycle(); err != nil {
 			t.Fatalf("ValidateCapabilityLifecycle(%s) error = %v", envelope.Type, err)
+		}
+	}
+}
+
+func TestSampleEdgeRoutingValidatesAllEvents(t *testing.T) {
+	t.Helper()
+
+	sample := SampleEdgeRouting()
+	if len(sample.Messages) != 5 {
+		t.Fatalf("expected 5 edge routing messages, got %d", len(sample.Messages))
+	}
+
+	targetParticipant := "agent.field.nullbot"
+	if sample.Messages[1].To[0] != targetParticipant {
+		t.Fatalf("expected task request target %q, got %#v", targetParticipant, sample.Messages[1].To)
+	}
+
+	for _, envelope := range sample.Messages {
+		switch envelope.Type {
+		case model.MessageTypeAgentSessionRegistered,
+			model.MessageTypeAgentSessionHeartbeat,
+			model.MessageTypeAgentDeliveryReceipt:
+			if err := envelope.ValidateEdgeRouting(); err != nil {
+				t.Fatalf("ValidateEdgeRouting(%s) error = %v", envelope.Type, err)
+			}
+		default:
+			if err := envelope.Validate(); err != nil {
+				t.Fatalf("Validate(%s) error = %v", envelope.Type, err)
+			}
 		}
 	}
 }

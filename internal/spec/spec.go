@@ -11,6 +11,7 @@ type Document struct {
 	Version                string                       `json:"version"`
 	Description            string                       `json:"description"`
 	MessageTypes           []model.MessageType          `json:"message_types"`
+	EdgeRouting            EdgeRoutingContract          `json:"edge_routing"`
 	CapabilityLifecycle    CapabilityLifecycleContract  `json:"capability_lifecycle"`
 	ThreadStatuses         []model.ThreadStatus         `json:"thread_statuses"`
 	ArtifactManifestFields []string                     `json:"artifact_manifest_fields"`
@@ -31,6 +32,17 @@ type CapabilityLifecycleContract struct {
 	Consumers      map[string][]string `json:"consumers"`
 }
 
+type EdgeRoutingContract struct {
+	MessageTypes  []model.MessageType `json:"message_types"`
+	SessionFields []string            `json:"session_fields"`
+	ReceiptFields []string            `json:"receipt_fields"`
+	DeliveryModes []string            `json:"delivery_modes"`
+	SessionStates []string            `json:"session_states"`
+	ReceiptStates []string            `json:"receipt_states"`
+	RoutingRule   string              `json:"routing_rule"`
+	Consumers     map[string][]string `json:"consumers"`
+}
+
 // V0 returns the initial protocol contract for Hivebus.
 func V0() Document {
 	return Document{
@@ -44,6 +56,9 @@ func V0() Document {
 			model.MessageTypeTaskResultFinal,
 			model.MessageTypeClarifyRequest,
 			model.MessageTypeClarifyResponse,
+			model.MessageTypeAgentSessionRegistered,
+			model.MessageTypeAgentSessionHeartbeat,
+			model.MessageTypeAgentDeliveryReceipt,
 			model.MessageTypeInstallRequested,
 			model.MessageTypeInstallVerified,
 			model.MessageTypeDoctorPassed,
@@ -57,6 +72,60 @@ func V0() Document {
 			model.MessageTypeDiagnosisPropose,
 			model.MessageTypeWorkOrderCreate,
 			model.MessageTypeTaskCancel,
+		},
+		EdgeRouting: EdgeRoutingContract{
+			MessageTypes: []model.MessageType{
+				model.MessageTypeAgentSessionRegistered,
+				model.MessageTypeAgentSessionHeartbeat,
+				model.MessageTypeAgentDeliveryReceipt,
+			},
+			SessionFields: []string{
+				"agent_id",
+				"installation_id",
+				"session_id",
+				"participant_id",
+				"capabilities",
+				"delivery_mode",
+				"session_status",
+				"lease_expires_at",
+				"host_alias",
+				"replaces_session_id",
+			},
+			ReceiptFields: []string{
+				"target_participant_id",
+				"target_agent_id",
+				"target_session_id",
+				"state",
+				"expires_at",
+				"queue_position",
+				"reason",
+			},
+			DeliveryModes: []string{
+				string(model.AgentDeliveryOutboundOnly),
+				string(model.AgentDeliveryQueued),
+			},
+			SessionStates: []string{
+				string(model.AgentSessionOnline),
+				string(model.AgentSessionOffline),
+				string(model.AgentSessionReplaced),
+			},
+			ReceiptStates: []string{
+				string(model.DeliveryReceiptQueued),
+				string(model.DeliveryReceiptDelivered),
+				string(model.DeliveryReceiptExpired),
+				string(model.DeliveryReceiptRefused),
+			},
+			RoutingRule: "Replies target participant_id inside the thread; session registration resolves that participant to the current edge session without exposing host IP or callback URLs.",
+			Consumers: map[string][]string{
+				"hivebus": {
+					"store session leases by participant_id and installation_id",
+					"treat queued and delivered receipts as explicit delivery evidence",
+				},
+				"operator": {
+					"inspect host_alias and lease state for diagnostics only",
+					"never target raw network location from thread messages",
+				},
+			},
 		},
 		CapabilityLifecycle: CapabilityLifecycleContract{
 			MessageTypes: []model.MessageType{
