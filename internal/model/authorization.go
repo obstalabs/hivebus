@@ -129,12 +129,16 @@ func (c AuthorizationContext) Validate(expectedClass AuthorizationRequestClass) 
 
 type ClarificationRequestPayload struct {
 	Question      string               `json:"question"`
+	Round         int                  `json:"round"`
 	Authorization AuthorizationContext `json:"authorization"`
 }
 
 func (p ClarificationRequestPayload) Validate() error {
 	if strings.TrimSpace(p.Question) == "" {
 		return errors.New("question is required")
+	}
+	if p.Round <= 0 {
+		return errors.New("round must be positive")
 	}
 	return p.Authorization.Validate(AuthorizationRequestClarification)
 }

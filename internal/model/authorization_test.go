@@ -32,6 +32,7 @@ func TestClarificationRequestPayloadValidateAcceptsStructuredAuthorization(t *te
 
 	payload := ClarificationRequestPayload{
 		Question: "Did the incident start after the 07:30 deployment?",
+		Round:    1,
 		Authorization: AuthorizationContext{
 			SenderParticipantID:   "agent.field.nullbot",
 			ParticipantMembership: ParticipantMembershipThreadParticipant,

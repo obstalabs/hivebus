@@ -29,6 +29,11 @@ type EdgeRoutingSample struct {
 	Messages []model.Envelope `json:"messages"`
 }
 
+type ClarificationLifecycleSample struct {
+	Thread   model.Thread     `json:"thread"`
+	Messages []model.Envelope `json:"messages"`
+}
+
 // SampleCase returns a fully verified sample ready for WO creation.
 func SampleCase() CaseBundle {
 	createdAt := time.Date(2026, 3, 31, 8, 0, 0, 0, time.UTC)
@@ -84,6 +89,7 @@ func SampleCase() CaseBundle {
 
 	questionPayload, err := json.Marshal(model.ClarificationRequestPayload{
 		Question: "Did the incident start after the 07:30 deployment?",
+		Round:    1,
 		Authorization: model.AuthorizationContext{
 			SenderParticipantID:   "agent.investigator",
 			ParticipantMembership: model.ParticipantMembershipThreadParticipant,
@@ -567,6 +573,174 @@ func SampleEdgeRouting() EdgeRoutingSample {
 	}
 
 	return EdgeRoutingSample{
+		Thread:   thread,
+		Messages: messages,
+	}
+}
+
+// SampleClarificationLifecycle returns a deterministic clarification loop with
+// explicit receipt states and a terminal outcome.
+func SampleClarificationLifecycle() ClarificationLifecycleSample {
+	baseTime := time.Date(2026, 4, 17, 8, 0, 0, 0, time.UTC)
+
+	thread := model.Thread{
+		ThreadID:     "thr_clarification_edge_cases",
+		Title:        "Clarification loop reaches explicit terminal state",
+		Status:       model.ThreadStatusWaiting,
+		CustomerTier: model.TierPro,
+		Source:       "hivebus",
+		Summary:      "Demonstrates clarification receipts, session replacement, and terminal outcomes without infinite conversational drift.",
+		Participants: []model.Participant{
+			{ID: "collector.nullbot", Kind: model.ParticipantCollector},
+			{ID: "agent.field.nullbot", Kind: model.ParticipantAgent, Capabilities: []string{"clarification.reply"}},
+			{ID: "service.hivebus", Kind: model.ParticipantService, Capabilities: []string{"clarification.track"}},
+		},
+		CreatedAt: baseTime,
+		UpdatedAt: baseTime.Add(4 * time.Minute),
+	}
+
+	requestPayload, err := json.Marshal(model.ClarificationRequestPayload{
+		Question: "Can you collect the failing ARM64 smoke logs?",
+		Round:    2,
+		Authorization: model.AuthorizationContext{
+			SenderParticipantID:   "collector.nullbot",
+			ParticipantMembership: model.ParticipantMembershipThreadParticipant,
+			RequestedScope:        "thread.reply",
+			RequestClass:          model.AuthorizationRequestClarification,
+			ApprovalState:         model.AuthorizationNotRequired,
+			ExpiresAt:             baseTime.Add(10 * time.Minute).Format(time.RFC3339),
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	queuedReceiptPayload, err := json.Marshal(model.ClarificationReceiptPayload{
+		RequestMessageID: "msg_clarify_001",
+		State:            model.ClarificationReceiptQueued,
+		QueuePosition:    1,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	sessionReplacedPayload, err := json.Marshal(model.ClarificationReceiptPayload{
+		RequestMessageID: "msg_clarify_001",
+		State:            model.ClarificationReceiptSessionSwap,
+		Reason:           "latest session replaced sess_nullbot_old with sess_nullbot_new",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	outcomePayload, err := json.Marshal(model.ClarificationOutcomePayload{
+		RequestMessageID: "msg_clarify_001",
+		Outcome:          model.ClarificationOutcomeNeedsHuman,
+		FailureState:     model.ClarificationFailureMaxRounds,
+		MaxRounds:        2,
+		MaxEvidenceBytes: 8192,
+		RoundsUsed:       2,
+		EvidenceBytes:    4096,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	messages := []model.Envelope{
+		{
+			MessageID:      "msg_clarify_001",
+			ThreadID:       thread.ThreadID,
+			From:           "collector.nullbot",
+			To:             []string{"agent.field.nullbot"},
+			Type:           model.MessageTypeClarifyRequest,
+			Payload:        requestPayload,
+			SentAt:         baseTime,
+			IdempotencyKey: "idem_msg_clarify_001",
+			Trace: model.Trace{
+				CorrelationID: "corr_thr_clarification_edge_cases",
+				SpanID:        "span_clarify_request",
+				Model:         "nullbot-local",
+				Verified:      true,
+			},
+			Security: model.Security{
+				Scheme:    "ed25519",
+				Nonce:     "nonce_msg_clarify_001",
+				Signature: "sig_msg_clarify_001",
+				Signed:    true,
+			},
+		},
+		{
+			MessageID:      "msg_clarify_002",
+			ThreadID:       thread.ThreadID,
+			From:           "service.hivebus",
+			To:             []string{"collector.nullbot"},
+			Type:           model.MessageTypeClarifyReceipt,
+			Payload:        queuedReceiptPayload,
+			ReplyTo:        "msg_clarify_001",
+			SentAt:         baseTime.Add(30 * time.Second),
+			IdempotencyKey: "idem_msg_clarify_002",
+			Trace: model.Trace{
+				CorrelationID: "corr_thr_clarification_edge_cases",
+				SpanID:        "span_clarify_queued",
+				Model:         "hivebus",
+				Verified:      true,
+			},
+			Security: model.Security{
+				Scheme:    "ed25519",
+				Nonce:     "nonce_msg_clarify_002",
+				Signature: "sig_msg_clarify_002",
+				Signed:    true,
+			},
+		},
+		{
+			MessageID:      "msg_clarify_003",
+			ThreadID:       thread.ThreadID,
+			From:           "service.hivebus",
+			To:             []string{"collector.nullbot"},
+			Type:           model.MessageTypeClarifyReceipt,
+			Payload:        sessionReplacedPayload,
+			ReplyTo:        "msg_clarify_001",
+			SentAt:         baseTime.Add(2 * time.Minute),
+			IdempotencyKey: "idem_msg_clarify_003",
+			Trace: model.Trace{
+				CorrelationID: "corr_thr_clarification_edge_cases",
+				SpanID:        "span_clarify_session_replaced",
+				Model:         "hivebus",
+				Verified:      true,
+			},
+			Security: model.Security{
+				Scheme:    "ed25519",
+				Nonce:     "nonce_msg_clarify_003",
+				Signature: "sig_msg_clarify_003",
+				Signed:    true,
+			},
+		},
+		{
+			MessageID:      "msg_clarify_004",
+			ThreadID:       thread.ThreadID,
+			From:           "service.hivebus",
+			To:             []string{"collector.nullbot"},
+			Type:           model.MessageTypeClarifyOutcome,
+			Payload:        outcomePayload,
+			ReplyTo:        "msg_clarify_001",
+			SentAt:         baseTime.Add(4 * time.Minute),
+			IdempotencyKey: "idem_msg_clarify_004",
+			Trace: model.Trace{
+				CorrelationID: "corr_thr_clarification_edge_cases",
+				SpanID:        "span_clarify_outcome",
+				Model:         "hivebus",
+				Verified:      true,
+			},
+			Security: model.Security{
+				Scheme:    "ed25519",
+				Nonce:     "nonce_msg_clarify_004",
+				Signature: "sig_msg_clarify_004",
+				Signed:    true,
+			},
+		},
+	}
+
+	return ClarificationLifecycleSample{
 		Thread:   thread,
 		Messages: messages,
 	}

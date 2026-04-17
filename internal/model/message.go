@@ -20,6 +20,8 @@ const (
 	MessageTypeTaskResultFinal        MessageType = "task.result.final"
 	MessageTypeClarifyRequest         MessageType = "clarification.request"
 	MessageTypeClarifyResponse        MessageType = "clarification.response"
+	MessageTypeClarifyReceipt         MessageType = "clarification.receipt"
+	MessageTypeClarifyOutcome         MessageType = "clarification.outcome"
 	MessageTypeAgentSessionRegistered MessageType = "agent.session.registered"
 	MessageTypeAgentSessionHeartbeat  MessageType = "agent.session.heartbeat"
 	MessageTypeAgentDeliveryReceipt   MessageType = "agent.delivery.receipt"
@@ -45,6 +47,8 @@ var validMessageTypes = []MessageType{
 	MessageTypeTaskResultFinal,
 	MessageTypeClarifyRequest,
 	MessageTypeClarifyResponse,
+	MessageTypeClarifyReceipt,
+	MessageTypeClarifyOutcome,
 	MessageTypeAgentSessionRegistered,
 	MessageTypeAgentSessionHeartbeat,
 	MessageTypeAgentDeliveryReceipt,

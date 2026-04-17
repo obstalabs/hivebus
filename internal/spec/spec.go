@@ -7,21 +7,22 @@ import (
 
 // Document is the compact machine contract for the v0 protocol.
 type Document struct {
-	Name                   string                       `json:"name"`
-	Version                string                       `json:"version"`
-	Description            string                       `json:"description"`
-	MessageTypes           []model.MessageType          `json:"message_types"`
-	Authorization          AuthorizationContract        `json:"authorization"`
-	EdgeRouting            EdgeRoutingContract          `json:"edge_routing"`
-	CapabilityLifecycle    CapabilityLifecycleContract  `json:"capability_lifecycle"`
-	ThreadStatuses         []model.ThreadStatus         `json:"thread_statuses"`
-	ArtifactManifestFields []string                     `json:"artifact_manifest_fields"`
-	TierLimits             map[model.Tier]policy.Limits `json:"tier_limits"`
-	EditionBoundary        policy.EditionBoundary       `json:"edition_boundary"`
-	FeatureBoundary        policy.FeatureBoundary       `json:"feature_boundary"`
-	TrackingSystem         string                       `json:"tracking_system"`
-	OptionalBridge         string                       `json:"optional_bridge,omitempty"`
-	WorkOrderGate          map[string]bool              `json:"work_order_gate"`
+	Name                   string                         `json:"name"`
+	Version                string                         `json:"version"`
+	Description            string                         `json:"description"`
+	MessageTypes           []model.MessageType            `json:"message_types"`
+	Authorization          AuthorizationContract          `json:"authorization"`
+	ClarificationLifecycle ClarificationLifecycleContract `json:"clarification_lifecycle"`
+	EdgeRouting            EdgeRoutingContract            `json:"edge_routing"`
+	CapabilityLifecycle    CapabilityLifecycleContract    `json:"capability_lifecycle"`
+	ThreadStatuses         []model.ThreadStatus           `json:"thread_statuses"`
+	ArtifactManifestFields []string                       `json:"artifact_manifest_fields"`
+	TierLimits             map[model.Tier]policy.Limits   `json:"tier_limits"`
+	EditionBoundary        policy.EditionBoundary         `json:"edition_boundary"`
+	FeatureBoundary        policy.FeatureBoundary         `json:"feature_boundary"`
+	TrackingSystem         string                         `json:"tracking_system"`
+	OptionalBridge         string                         `json:"optional_bridge,omitempty"`
+	WorkOrderGate          map[string]bool                `json:"work_order_gate"`
 }
 
 type CapabilityLifecycleContract struct {
@@ -51,6 +52,14 @@ type AuthorizationContract struct {
 	RefusalReasons   []string            `json:"refusal_reasons"`
 	MembershipStates []string            `json:"membership_states"`
 	DecisionPoints   []string            `json:"decision_points"`
+	Consumers        map[string][]string `json:"consumers"`
+}
+
+type ClarificationLifecycleContract struct {
+	ReceiptStates    []string            `json:"receipt_states"`
+	FailureStates    []string            `json:"failure_states"`
+	TerminalOutcomes []string            `json:"terminal_outcomes"`
+	BudgetFields     []string            `json:"budget_fields"`
 	Consumers        map[string][]string `json:"consumers"`
 }
 
@@ -130,6 +139,52 @@ func V0() Document {
 				"policy": {
 					"separate thread-bound authorization from transport reachability",
 					"treat forbidden capability and missing approval as explicit refusal outcomes",
+				},
+			},
+		},
+		ClarificationLifecycle: ClarificationLifecycleContract{
+			ReceiptStates: []string{
+				string(model.ClarificationReceiptQueued),
+				string(model.ClarificationReceiptDelivered),
+				string(model.ClarificationReceiptUnanswered),
+				string(model.ClarificationReceiptRefused),
+				string(model.ClarificationReceiptDuplicate),
+				string(model.ClarificationReceiptStale),
+				string(model.ClarificationReceiptSessionSwap),
+			},
+			FailureStates: []string{
+				string(model.ClarificationFailureDuplicateRequest),
+				string(model.ClarificationFailureStaleRequest),
+				string(model.ClarificationFailureStaleResponse),
+				string(model.ClarificationFailureConflicting),
+				string(model.ClarificationFailureExpired),
+				string(model.ClarificationFailureThreadFinalized),
+				string(model.ClarificationFailureSessionReplaced),
+				string(model.ClarificationFailureMaxRounds),
+			},
+			TerminalOutcomes: []string{
+				string(model.ClarificationOutcomeReadyForWO),
+				string(model.ClarificationOutcomeNeedsHuman),
+				string(model.ClarificationOutcomeAbandoned),
+			},
+			BudgetFields: []string{
+				"max_rounds",
+				"max_evidence_bytes",
+				"rounds_used",
+				"evidence_bytes",
+			},
+			Consumers: map[string][]string{
+				"sentinel": {
+					"consume duplicate, stale, expired, session-replaced, and max-round failures structurally",
+					"read terminal clarification outcomes without parsing prose",
+				},
+				"workledger": {
+					"map ready_for_wo, needs_human, and abandoned outcomes into notes or lifecycle state",
+					"preserve clarification failure_state for audit instead of inferring from missing replies",
+				},
+				"runtime": {
+					"latest-session-wins is represented by clarification.session_replaced receipt state",
+					"queued, delivered, unanswered, and refused are explicit delivery outcomes",
 				},
 			},
 		},

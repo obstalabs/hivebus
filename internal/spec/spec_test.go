@@ -86,6 +86,26 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 		t.Fatal("expected field agent authorization rules")
 	}
 
+	if len(document.ClarificationLifecycle.ReceiptStates) != 7 {
+		t.Fatalf("expected 7 clarification receipt states, got %d", len(document.ClarificationLifecycle.ReceiptStates))
+	}
+
+	if len(document.ClarificationLifecycle.FailureStates) != 8 {
+		t.Fatalf("expected 8 clarification failure states, got %d", len(document.ClarificationLifecycle.FailureStates))
+	}
+
+	if len(document.ClarificationLifecycle.TerminalOutcomes) != 3 {
+		t.Fatalf("expected 3 clarification terminal outcomes, got %d", len(document.ClarificationLifecycle.TerminalOutcomes))
+	}
+
+	if len(document.ClarificationLifecycle.BudgetFields) != 4 {
+		t.Fatalf("expected 4 clarification budget fields, got %d", len(document.ClarificationLifecycle.BudgetFields))
+	}
+
+	if len(document.ClarificationLifecycle.Consumers["sentinel"]) == 0 {
+		t.Fatal("expected clarification lifecycle sentinel rules")
+	}
+
 	if len(document.CapabilityLifecycle.MessageTypes) != 9 {
 		t.Fatalf("expected 9 capability lifecycle message types, got %d", len(document.CapabilityLifecycle.MessageTypes))
 	}
@@ -207,5 +227,33 @@ func TestSampleCaseClarificationPayloadUsesStructuredAuthorization(t *testing.T)
 
 	if err := payload.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestSampleClarificationLifecycleValidatesAllEvents(t *testing.T) {
+	t.Helper()
+
+	sample := SampleClarificationLifecycle()
+	if len(sample.Messages) != 4 {
+		t.Fatalf("expected 4 clarification lifecycle messages, got %d", len(sample.Messages))
+	}
+
+	for _, envelope := range sample.Messages {
+		switch envelope.Type {
+		case model.MessageTypeClarifyRequest:
+			var payload model.ClarificationRequestPayload
+			if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+				t.Fatalf("Unmarshal(clarification request) error = %v", err)
+			}
+			if err := payload.Validate(); err != nil {
+				t.Fatalf("ClarificationRequestPayload.Validate() error = %v", err)
+			}
+		case model.MessageTypeClarifyReceipt, model.MessageTypeClarifyOutcome:
+			if err := envelope.ValidateClarificationLifecycle(); err != nil {
+				t.Fatalf("ValidateClarificationLifecycle(%s) error = %v", envelope.Type, err)
+			}
+		default:
+			t.Fatalf("unexpected message type %s", envelope.Type)
+		}
 	}
 }
