@@ -250,3 +250,24 @@ func (e Envelope) ValidateTaskResultFinal(request Envelope) error {
 
 	return nil
 }
+
+// ValidateTaskResultPart applies runtime checks for a task.result.partial envelope.
+func (e Envelope) ValidateTaskResultPart(request Envelope) error {
+	if err := request.ValidateTaskRequest(); err != nil {
+		return fmt.Errorf("invalid request envelope: %w", err)
+	}
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	if e.Type != MessageTypeTaskResultPart {
+		return fmt.Errorf("expected %q, got %q", MessageTypeTaskResultPart, e.Type)
+	}
+	if e.ThreadID != request.ThreadID {
+		return errors.New("task.result.partial thread_id must match request thread_id")
+	}
+	if strings.TrimSpace(e.ReplyTo) != request.MessageID {
+		return errors.New("task.result.partial reply_to must match request message_id")
+	}
+
+	return nil
+}

@@ -37,11 +37,13 @@ func NewHandler(st *store.Store, artifacts *artifact.Store, keys *KeyStore) http
 	mux.HandleFunc("GET /v0/artifacts/{sha256}", withAuth(keys, RoleWorker, srv.handleGetArtifact))
 	mux.HandleFunc("POST /v0/threads", withAuth(keys, RoleOperator, srv.handleCreateThread))
 	mux.HandleFunc("GET /v0/threads/{threadID}", withAuth(keys, RoleOperator, srv.handleGetThread))
+	mux.HandleFunc("GET /v0/threads/{threadID}/watch", withAuth(keys, RoleWorker, srv.handleWatchThread))
 	mux.HandleFunc("POST /v0/threads/{threadID}/artifacts", withAuth(keys, RoleWorker, srv.handlePutArtifact))
 	mux.HandleFunc("POST /v0/threads/{threadID}/messages", withAuth(keys, RoleOperator, srv.handleAppendEnvelope))
 	mux.HandleFunc("POST /v0/workers/poll", withAuth(keys, RoleWorker, srv.handleWorkerPoll))
 	mux.HandleFunc("POST /v0/workers/claim", withAuth(keys, RoleWorker, srv.handleWorkerClaim))
 	mux.HandleFunc("POST /v0/workers/leases/{leaseID}/renew", withAuth(keys, RoleWorker, srv.handleLeaseRenew))
+	mux.HandleFunc("POST /v0/workers/leases/{leaseID}/partial", withAuth(keys, RoleWorker, srv.handleLeasePartial))
 	mux.HandleFunc("POST /v0/workers/leases/{leaseID}/complete", withAuth(keys, RoleWorker, srv.handleLeaseComplete))
 
 	return mux

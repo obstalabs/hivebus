@@ -28,6 +28,7 @@ work-order derivation as typed JSON threads instead of ad hoc text blobs.`,
 	cmd.AddCommand(newSpecCommand())
 	cmd.AddCommand(newSampleCommand())
 	cmd.AddCommand(newServeCommand())
+	cmd.AddCommand(newWatchCommand())
 
 	return cmd
 }

@@ -426,6 +426,76 @@ func (s *Store) CompleteLease(
 	return lease, nil
 }
 
+func (s *Store) AppendLeaseResultPart(
+	ctx context.Context,
+	leaseID string,
+	workerID string,
+	result model.Envelope,
+	now time.Time,
+) error {
+	if strings.TrimSpace(leaseID) == "" {
+		return errors.New("lease_id is required")
+	}
+	if strings.TrimSpace(workerID) == "" {
+		return errors.New("worker_id is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin partial-result transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := expireStaleLeasesTx(ctx, tx, now); err != nil {
+		return err
+	}
+
+	lease, err := loadLeaseTx(ctx, tx, leaseID)
+	if err != nil {
+		return err
+	}
+	if lease.WorkerID != workerID {
+		return ErrLeaseNotOwned
+	}
+	switch lease.Status {
+	case LeaseStatusExpired:
+		return ErrLeaseExpired
+	case LeaseStatusCompleted:
+		return ErrLeaseFinalized
+	case LeaseStatusActive:
+	default:
+		return fmt.Errorf("unsupported lease status %q", lease.Status)
+	}
+
+	request, err := loadTaskEnvelopeTx(ctx, tx, lease.TaskMessageID)
+	if err != nil {
+		return err
+	}
+	if err := result.ValidateTaskResultPart(request); err != nil {
+		return err
+	}
+	if result.From != workerID {
+		return errors.New("task.result.partial from must match worker_id")
+	}
+
+	if err := insertEnvelopeEventTx(ctx, tx, result); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit partial result: %w", err)
+	}
+
+	return nil
+}
+
 func expireStaleLeasesTx(ctx context.Context, tx *sql.Tx, now time.Time) error {
 	rows, err := tx.QueryContext(
 		ctx,

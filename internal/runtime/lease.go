@@ -19,6 +19,11 @@ type leaseCompleteRequest struct {
 	ResultEnvelope model.Envelope `json:"result_envelope"`
 }
 
+type leasePartialRequest struct {
+	WorkerID       string         `json:"worker_id"`
+	ResultEnvelope model.Envelope `json:"result_envelope"`
+}
+
 type leaseResponse struct {
 	Status string      `json:"status"`
 	Lease  store.Lease `json:"lease"`
@@ -92,5 +97,35 @@ func (s *server) handleLeaseComplete(w http.ResponseWriter, r *http.Request) {
 			Status: "completed",
 			Lease:  lease,
 		})
+	}
+}
+
+func (s *server) handleLeasePartial(w http.ResponseWriter, r *http.Request) {
+	var request leasePartialRequest
+	if err := decodeJSON(r.Body, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	err := s.store.AppendLeaseResultPart(
+		r.Context(),
+		r.PathValue("leaseID"),
+		request.WorkerID,
+		request.ResultEnvelope,
+		currentTime(),
+	)
+	switch {
+	case errors.Is(err, store.ErrLeaseNotFound):
+		writeError(w, http.StatusNotFound, err)
+	case errors.Is(err, store.ErrLeaseExpired), errors.Is(err, store.ErrLeaseFinalized):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, store.ErrLeaseNotOwned):
+		writeError(w, http.StatusForbidden, err)
+	case err != nil && isInputError(err):
+		writeError(w, http.StatusBadRequest, err)
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err)
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "streaming"})
 	}
 }
