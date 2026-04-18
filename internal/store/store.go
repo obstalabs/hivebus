@@ -325,6 +325,50 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS worker_leases_completed_task_unique
 			ON worker_leases(task_message_id)
 			WHERE status = 'completed'`,
+		`CREATE TABLE IF NOT EXISTS agent_sessions (
+			agent_id TEXT NOT NULL,
+			installation_id TEXT NOT NULL,
+			session_id TEXT PRIMARY KEY,
+			participant_id TEXT NOT NULL,
+			capabilities_json TEXT NOT NULL,
+			delivery_mode TEXT NOT NULL,
+			session_status TEXT NOT NULL,
+			lease_expires_at TEXT NOT NULL,
+			host_alias TEXT NOT NULL,
+			replaces_session_id TEXT NOT NULL,
+			registered_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS agent_sessions_participant_status_idx
+			ON agent_sessions(participant_id, session_status, lease_expires_at, last_seen_at)`,
+		`CREATE TABLE IF NOT EXISTS agent_messages (
+			message_id TEXT PRIMARY KEY,
+			sender_session_id TEXT NOT NULL,
+			sender_participant_id TEXT NOT NULL,
+			target_participant_id TEXT NOT NULL,
+			target_agent_id TEXT NOT NULL,
+			body TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			state TEXT NOT NULL,
+			delivered_session_id TEXT NOT NULL,
+			delivered_at TEXT NOT NULL,
+			reason TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS agent_messages_target_state_created_idx
+			ON agent_messages(target_participant_id, state, created_at)`,
+		`CREATE TABLE IF NOT EXISTS agent_message_events (
+			sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+			message_id TEXT NOT NULL,
+			event_at TEXT NOT NULL,
+			state TEXT NOT NULL,
+			target_session_id TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			queue_position INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS agent_message_events_message_sequence_idx
+			ON agent_message_events(message_id, sequence)`,
 	}
 
 	for _, statement := range statements {

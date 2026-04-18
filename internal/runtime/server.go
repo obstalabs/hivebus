@@ -48,6 +48,12 @@ func NewHandlerWithOptions(
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", srv.handleHealthz)
+	mux.HandleFunc("POST /v0/agents/sessions/register", withAuth(keys, RoleWorker, srv.handleRegisterAgentSession))
+	mux.HandleFunc("POST /v0/agents/sessions/heartbeat", withAuth(keys, RoleWorker, srv.handleHeartbeatAgentSession))
+	mux.HandleFunc("GET /v0/agents/sessions/{sessionID}/inbox", withAuth(keys, RoleWorker, srv.handlePeekAgentInbox))
+	mux.HandleFunc("POST /v0/agents/messages/send", withAuth(keys, RoleOperator, srv.handleSendAgentMessage))
+	mux.HandleFunc("GET /v0/agents/messages/{messageID}", withAuth(keys, RoleOperator, srv.handleGetAgentMessage))
+	mux.HandleFunc("POST /v0/agents/messages/{messageID}/deliver", withAuth(keys, RoleWorker, srv.handleDeliverAgentMessage))
 	mux.HandleFunc("POST /v0/intake/nullbot", withAuth(keys, RoleOperator, srv.handleNullbotIntake))
 	mux.HandleFunc("POST /v0/dispatch", withAuth(keys, RoleOperator, srv.handleDispatch))
 	mux.HandleFunc("GET /v0/dispatch/{threadID}/resume", withAuth(keys, RoleOperator, srv.handleDispatchResume))

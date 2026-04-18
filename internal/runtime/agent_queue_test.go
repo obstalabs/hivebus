@@ -1,0 +1,192 @@
+package runtime
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/ppiankov/hivebus/internal/store"
+)
+
+func TestAgentMessagingLifecycleOverHTTP(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
+
+	registerBody := marshalJSON(t, model.AgentSessionPayload{
+		AgentID:        "nullbot-edge",
+		InstallationID: "install_nullbot_edge_001",
+		SessionID:      "sess_nullbot_001",
+		ParticipantID:  "agent.field.nullbot",
+		Capabilities:   []string{"clarification.reply"},
+		DeliveryMode:   model.AgentDeliveryQueued,
+		SessionStatus:  model.AgentSessionOnline,
+		LeaseExpiresAt: time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
+		HostAlias:      "smokevm-arm64",
+	})
+	registerReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v0/agents/sessions/register",
+		bytes.NewReader(registerBody),
+	)
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerReq.Header.Set("Authorization", "Bearer worker-secret")
+	registerRec := httptest.NewRecorder()
+	handler.ServeHTTP(registerRec, registerReq)
+	if registerRec.Code != http.StatusCreated {
+		t.Fatalf("register status = %d, body = %s", registerRec.Code, registerRec.Body.String())
+	}
+
+	sendBody := marshalJSON(t, sendAgentMessageRequest{
+		MessageID:           "msg_agent_001",
+		SenderSessionID:     "sess_dispatch_001",
+		SenderParticipantID: "agent.dispatch",
+		TargetParticipantID: "agent.field.nullbot",
+		Body:                "I finished the API. Please run the smoke tests next.",
+	})
+	sendReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v0/agents/messages/send",
+		bytes.NewReader(sendBody),
+	)
+	sendReq.Header.Set("Content-Type", "application/json")
+	sendReq.Header.Set("Authorization", "Bearer operator-secret")
+	sendRec := httptest.NewRecorder()
+	handler.ServeHTTP(sendRec, sendReq)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("send status = %d, body = %s", sendRec.Code, sendRec.Body.String())
+	}
+
+	inboxReq := httptest.NewRequest(
+		http.MethodGet,
+		"/v0/agents/sessions/sess_nullbot_001/inbox",
+		nil,
+	)
+	inboxReq.Header.Set("Authorization", "Bearer worker-secret")
+	inboxRec := httptest.NewRecorder()
+	handler.ServeHTTP(inboxRec, inboxReq)
+	if inboxRec.Code != http.StatusOK {
+		t.Fatalf("inbox status = %d, body = %s", inboxRec.Code, inboxRec.Body.String())
+	}
+
+	var inbox inboxResponse
+	if err := json.Unmarshal(inboxRec.Body.Bytes(), &inbox); err != nil {
+		t.Fatalf("Unmarshal(inbox) error = %v", err)
+	}
+	if len(inbox.Messages) != 1 || inbox.Messages[0].Message.MessageID != "msg_agent_001" {
+		t.Fatalf("unexpected inbox payload %#v", inbox)
+	}
+
+	deliverBody := marshalJSON(t, deliverAgentMessageRequest{SessionID: "sess_nullbot_001"})
+	deliverReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v0/agents/messages/msg_agent_001/deliver",
+		bytes.NewReader(deliverBody),
+	)
+	deliverReq.Header.Set("Content-Type", "application/json")
+	deliverReq.Header.Set("Authorization", "Bearer worker-secret")
+	deliverRec := httptest.NewRecorder()
+	handler.ServeHTTP(deliverRec, deliverReq)
+	if deliverRec.Code != http.StatusOK {
+		t.Fatalf("deliver status = %d, body = %s", deliverRec.Code, deliverRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v0/agents/messages/msg_agent_001", nil)
+	getReq.Header.Set("Authorization", "Bearer operator-secret")
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, body = %s", getRec.Code, getRec.Body.String())
+	}
+
+	var record store.AgentMessageRecord
+	if err := json.Unmarshal(getRec.Body.Bytes(), &record); err != nil {
+		t.Fatalf("Unmarshal(record) error = %v", err)
+	}
+	if record.Message.State != model.DeliveryReceiptDelivered {
+		t.Fatalf("expected delivered state, got %q", record.Message.State)
+	}
+	if len(record.Events) != 2 {
+		t.Fatalf("expected queued + delivered events, got %#v", record.Events)
+	}
+}
+
+func TestAgentMessagingRequiresMatchingQueueOnDeliver(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
+
+	mustRegisterAgentSession(t, handler, "sess_nullbot_001", "agent.field.nullbot")
+	mustRegisterAgentSession(t, handler, "sess_other_001", "agent.other")
+	mustSendAgentMessage(t, handler, "msg_agent_conflict", "agent.field.nullbot")
+
+	deliverBody := marshalJSON(t, deliverAgentMessageRequest{SessionID: "sess_other_001"})
+	deliverReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v0/agents/messages/msg_agent_conflict/deliver",
+		bytes.NewReader(deliverBody),
+	)
+	deliverReq.Header.Set("Content-Type", "application/json")
+	deliverReq.Header.Set("Authorization", "Bearer worker-secret")
+	deliverRec := httptest.NewRecorder()
+	handler.ServeHTTP(deliverRec, deliverReq)
+	if deliverRec.Code != http.StatusConflict {
+		t.Fatalf("deliver conflict status = %d, body = %s", deliverRec.Code, deliverRec.Body.String())
+	}
+}
+
+func mustRegisterAgentSession(
+	t *testing.T,
+	handler http.Handler,
+	sessionID string,
+	participantID string,
+) {
+	t.Helper()
+
+	registerBody := marshalJSON(t, model.AgentSessionPayload{
+		AgentID:        "agent-" + participantID,
+		InstallationID: "install-" + participantID,
+		SessionID:      sessionID,
+		ParticipantID:  participantID,
+		Capabilities:   []string{"clarification.reply"},
+		DeliveryMode:   model.AgentDeliveryQueued,
+		SessionStatus:  model.AgentSessionOnline,
+		LeaseExpiresAt: time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v0/agents/sessions/register", bytes.NewReader(registerBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer worker-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func mustSendAgentMessage(t *testing.T, handler http.Handler, messageID string, targetParticipantID string) {
+	t.Helper()
+
+	sendBody := marshalJSON(t, sendAgentMessageRequest{
+		MessageID:           messageID,
+		SenderSessionID:     "sess_dispatch_001",
+		SenderParticipantID: "agent.dispatch",
+		TargetParticipantID: targetParticipantID,
+		Body:                "Heads up from another agent.",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v0/agents/messages/send", bytes.NewReader(sendBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer operator-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
