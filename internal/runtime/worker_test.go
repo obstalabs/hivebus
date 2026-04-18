@@ -203,6 +203,42 @@ func sampleResultEnvelope(
 	}
 }
 
+func sampleResultEnvelopeWithTools(
+	request model.Envelope,
+	workerID string,
+	messageID string,
+	idempotencyKey string,
+	sentAt time.Time,
+	toolsUsed ...string,
+) model.Envelope {
+	payload, err := json.Marshal(model.TaskResultFinalPayload{
+		Status:    "done",
+		ToolsUsed: toolsUsed,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return model.Envelope{
+		MessageID:      messageID,
+		ThreadID:       request.ThreadID,
+		From:           workerID,
+		To:             []string{request.From},
+		Type:           model.MessageTypeTaskResultFinal,
+		Payload:        payload,
+		ReplyTo:        request.MessageID,
+		SentAt:         sentAt,
+		IdempotencyKey: idempotencyKey,
+		Trace: model.Trace{
+			CorrelationID: request.Trace.CorrelationID,
+		},
+		Security: model.Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_" + messageID,
+		},
+	}
+}
+
 func sampleWorkerTask(
 	threadID string,
 	messageID string,
@@ -218,6 +254,33 @@ func sampleWorkerTask(
 		To:             []string{workerID},
 		Type:           model.MessageTypeTaskRequest,
 		Payload:        json.RawMessage(`{"issue":"smoke lane unstable"}`),
+		SentAt:         now,
+		IdempotencyKey: idempotencyKey,
+		Trace: model.Trace{
+			CorrelationID: "corr_" + messageID,
+		},
+		Security: model.Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_" + messageID,
+		},
+	}
+}
+
+func sampleCapabilityTask(
+	threadID string,
+	messageID string,
+	idempotencyKey string,
+	capability string,
+) model.Envelope {
+	now := time.Date(2026, 4, 15, 6, 1, 0, 0, time.UTC)
+
+	return model.Envelope{
+		MessageID:      messageID,
+		ThreadID:       threadID,
+		From:           "collector.nullbot",
+		Capability:     capability,
+		Type:           model.MessageTypeTaskRequest,
+		Payload:        json.RawMessage(`{"issue":"smoke vm context lost"}`),
 		SentAt:         now,
 		IdempotencyKey: idempotencyKey,
 		Trace: model.Trace{

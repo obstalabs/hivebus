@@ -67,6 +67,8 @@ func NewHandlerWithOptions(
 	mux.HandleFunc("GET /v0/threads/{threadID}/watch", withAuth(keys, RoleWorker, srv.handleWatchThread))
 	mux.HandleFunc("POST /v0/threads/{threadID}/artifacts", withAuth(keys, RoleWorker, srv.handlePutArtifact))
 	mux.HandleFunc("POST /v0/threads/{threadID}/messages", withAuth(keys, RoleOperator, srv.handleAppendEnvelope))
+	mux.HandleFunc("GET /v0/workers/{workerID}/capabilities", withAuth(keys, RoleOperator, srv.handleListWorkerCapabilities))
+	mux.HandleFunc("POST /v0/workers/{workerID}/capabilities/{capabilityID}/approve", withAuth(keys, RoleOperator, srv.handleApproveWorkerCapability))
 	mux.HandleFunc("POST /v0/workers/poll", withAuth(keys, RoleWorker, srv.handleWorkerPoll))
 	mux.HandleFunc("POST /v0/workers/claim", withAuth(keys, RoleWorker, srv.handleWorkerClaim))
 	mux.HandleFunc("POST /v0/workers/leases/{leaseID}/clarifications/request", withAuth(keys, RoleWorker, srv.handleClarificationRequest))

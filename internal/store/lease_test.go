@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -217,6 +218,238 @@ func TestRenewExpiredLeaseAndDuplicateCompletionAreRejected(t *testing.T) {
 	}
 }
 
+func TestCapabilityDiscoveryPromotesTrustedCapabilitiesToPolling(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	baseTime := time.Date(2026, 4, 18, 8, 0, 0, 0, time.UTC)
+
+	for i := 0; i < capabilityValidationSuccessThreshold; i++ {
+		thread := sampleThread()
+		thread.ThreadID = fmt.Sprintf("thr_capability_%d", i+1)
+		thread.CreatedAt = baseTime.Add(time.Duration(i) * time.Hour)
+		thread.UpdatedAt = thread.CreatedAt
+		if _, err := st.AppendThread(t.Context(), thread); err != nil {
+			t.Fatalf("AppendThread(%d) error = %v", i+1, err)
+		}
+
+		request := sampleWorkerTask(
+			thread.ThreadID,
+			fmt.Sprintf("msg_task_%d", i+1),
+			fmt.Sprintf("idem_task_%d", i+1),
+			"worker.smokevm",
+		)
+		request.SentAt = thread.CreatedAt.Add(time.Minute)
+		if err := st.AppendEnvelope(t.Context(), request); err != nil {
+			t.Fatalf("AppendEnvelope(task %d) error = %v", i+1, err)
+		}
+
+		accepted := sampleAcceptedEnvelope(
+			request,
+			"worker.smokevm",
+			fmt.Sprintf("msg_accepted_%d", i+1),
+			fmt.Sprintf("idem_accepted_%d", i+1),
+			request.SentAt.Add(time.Minute),
+		)
+		lease, err := st.ClaimTask(
+			t.Context(),
+			"worker.smokevm",
+			request.MessageID,
+			accepted,
+			5*time.Minute,
+			request.SentAt.Add(time.Minute),
+		)
+		if err != nil {
+			t.Fatalf("ClaimTask(%d) error = %v", i+1, err)
+		}
+
+		result := sampleResultEnvelopeWithTools(
+			request,
+			"worker.smokevm",
+			fmt.Sprintf("msg_result_%d", i+1),
+			fmt.Sprintf("idem_result_%d", i+1),
+			request.SentAt.Add(2*time.Minute),
+			"go-testing",
+		)
+		if _, err := st.CompleteLease(
+			t.Context(),
+			lease.LeaseID,
+			"worker.smokevm",
+			result,
+			request.SentAt.Add(2*time.Minute),
+		); err != nil {
+			t.Fatalf("CompleteLease(%d) error = %v", i+1, err)
+		}
+	}
+
+	records, err := st.ListDiscoveredCapabilities(t.Context(), "worker.smokevm", baseTime.Add(4*time.Hour))
+	if err != nil {
+		t.Fatalf("ListDiscoveredCapabilities() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 discovered capability, got %#v", records)
+	}
+	if records[0].TrustLevel != model.CapabilityTrustValidated || !records[0].PendingApproval {
+		t.Fatalf("expected validated pending capability, got %#v", records[0])
+	}
+
+	capabilityThread := sampleThread()
+	capabilityThread.ThreadID = "thr_capability_poll"
+	capabilityThread.CreatedAt = baseTime.Add(5 * time.Hour)
+	capabilityThread.UpdatedAt = capabilityThread.CreatedAt
+	if _, err := st.AppendThread(t.Context(), capabilityThread); err != nil {
+		t.Fatalf("AppendThread(capability poll) error = %v", err)
+	}
+
+	capabilityTask := sampleCapabilityTask(
+		capabilityThread.ThreadID,
+		"msg_capability_task",
+		"idem_capability_task",
+		"go-testing",
+	)
+	capabilityTask.SentAt = capabilityThread.CreatedAt.Add(time.Minute)
+	if err := st.AppendEnvelope(t.Context(), capabilityTask); err != nil {
+		t.Fatalf("AppendEnvelope(capability task) error = %v", err)
+	}
+
+	beforeApproval, err := st.PollTask(t.Context(), "worker.smokevm", nil, capabilityTask.SentAt.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("PollTask(before approval) error = %v", err)
+	}
+	if beforeApproval.Status != PollResultIdle {
+		t.Fatalf("expected idle before approval, got %#v", beforeApproval)
+	}
+
+	approved, err := st.ApproveDiscoveredCapability(
+		t.Context(),
+		"worker.smokevm",
+		"go-testing",
+		"operator.root",
+		baseTime.Add(6*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("ApproveDiscoveredCapability() error = %v", err)
+	}
+	if approved.TrustLevel != model.CapabilityTrustTrusted || approved.PendingApproval {
+		t.Fatalf("expected trusted approved capability, got %#v", approved)
+	}
+
+	afterApproval, err := st.PollTask(t.Context(), "worker.smokevm", nil, capabilityTask.SentAt.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("PollTask(after approval) error = %v", err)
+	}
+	if afterApproval.Status != PollResultAvailable || afterApproval.Task == nil ||
+		afterApproval.Task.Envelope.MessageID != capabilityTask.MessageID {
+		t.Fatalf("expected trusted capability task, got %#v", afterApproval)
+	}
+}
+
+func TestCapabilityDiscoveryDecayRemovesTrustedCapabilityFromPolling(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	baseTime := time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC)
+
+	thread := sampleThread()
+	thread.ThreadID = "thr_capability_decay"
+	thread.CreatedAt = baseTime
+	thread.UpdatedAt = baseTime
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	request := sampleWorkerTask(thread.ThreadID, "msg_task_decay", "idem_task_decay", "worker.smokevm")
+	request.SentAt = baseTime.Add(time.Minute)
+	if err := st.AppendEnvelope(t.Context(), request); err != nil {
+		t.Fatalf("AppendEnvelope(task) error = %v", err)
+	}
+
+	accepted := sampleAcceptedEnvelope(request, "worker.smokevm", "msg_accepted_decay", "idem_accepted_decay", request.SentAt.Add(time.Minute))
+	lease, err := st.ClaimTask(
+		t.Context(),
+		"worker.smokevm",
+		request.MessageID,
+		accepted,
+		5*time.Minute,
+		request.SentAt.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("ClaimTask() error = %v", err)
+	}
+
+	result := sampleResultEnvelopeWithTools(
+		request,
+		"worker.smokevm",
+		"msg_result_decay",
+		"idem_result_decay",
+		request.SentAt.Add(2*time.Minute),
+		"go-testing",
+	)
+	if _, err := st.CompleteLease(
+		t.Context(),
+		lease.LeaseID,
+		"worker.smokevm",
+		result,
+		request.SentAt.Add(2*time.Minute),
+	); err != nil {
+		t.Fatalf("CompleteLease() error = %v", err)
+	}
+
+	if _, err := st.ApproveDiscoveredCapability(
+		t.Context(),
+		"worker.smokevm",
+		"go-testing",
+		"operator.root",
+		baseTime.Add(3*time.Minute),
+	); err != nil {
+		t.Fatalf("ApproveDiscoveredCapability() error = %v", err)
+	}
+
+	records, err := st.ListDiscoveredCapabilities(
+		t.Context(),
+		"worker.smokevm",
+		baseTime.Add(capabilityDecayWindow).Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("ListDiscoveredCapabilities() error = %v", err)
+	}
+	if len(records) != 1 || !records[0].Decayed {
+		t.Fatalf("expected decayed capability, got %#v", records)
+	}
+
+	capabilityThread := sampleThread()
+	capabilityThread.ThreadID = "thr_capability_decay_poll"
+	capabilityThread.CreatedAt = baseTime.Add(capabilityDecayWindow).Add(2 * time.Hour)
+	capabilityThread.UpdatedAt = capabilityThread.CreatedAt
+	if _, err := st.AppendThread(t.Context(), capabilityThread); err != nil {
+		t.Fatalf("AppendThread(capability poll) error = %v", err)
+	}
+
+	capabilityTask := sampleCapabilityTask(
+		capabilityThread.ThreadID,
+		"msg_capability_decay_task",
+		"idem_capability_decay_task",
+		"go-testing",
+	)
+	capabilityTask.SentAt = capabilityThread.CreatedAt.Add(time.Minute)
+	if err := st.AppendEnvelope(t.Context(), capabilityTask); err != nil {
+		t.Fatalf("AppendEnvelope(capability task) error = %v", err)
+	}
+
+	poll, err := st.PollTask(
+		t.Context(),
+		"worker.smokevm",
+		nil,
+		capabilityTask.SentAt.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("PollTask() error = %v", err)
+	}
+	if poll.Status != PollResultIdle {
+		t.Fatalf("expected idle after decay, got %#v", poll)
+	}
+}
+
 func sampleAcceptedEnvelope(
 	request model.Envelope,
 	workerID string,
@@ -258,6 +491,42 @@ func sampleResultEnvelope(
 		To:             []string{request.From},
 		Type:           model.MessageTypeTaskResultFinal,
 		Payload:        json.RawMessage(`{"status":"done"}`),
+		ReplyTo:        request.MessageID,
+		SentAt:         sentAt,
+		IdempotencyKey: idempotencyKey,
+		Trace: model.Trace{
+			CorrelationID: request.Trace.CorrelationID,
+		},
+		Security: model.Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_" + messageID,
+		},
+	}
+}
+
+func sampleResultEnvelopeWithTools(
+	request model.Envelope,
+	workerID string,
+	messageID string,
+	idempotencyKey string,
+	sentAt time.Time,
+	toolsUsed ...string,
+) model.Envelope {
+	payload, err := json.Marshal(model.TaskResultFinalPayload{
+		Status:    "done",
+		ToolsUsed: toolsUsed,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return model.Envelope{
+		MessageID:      messageID,
+		ThreadID:       request.ThreadID,
+		From:           workerID,
+		To:             []string{request.From},
+		Type:           model.MessageTypeTaskResultFinal,
+		Payload:        payload,
 		ReplyTo:        request.MessageID,
 		SentAt:         sentAt,
 		IdempotencyKey: idempotencyKey,

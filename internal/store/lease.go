@@ -130,7 +130,11 @@ func (s *Store) PollTask(
 		}, nil
 	}
 
-	task, err := findAvailableTaskTx(ctx, tx, workerID, capabilities)
+	trusted, err := trustedCapabilitiesTx(ctx, tx, workerID, now)
+	if err != nil {
+		return PollResult{}, err
+	}
+	task, err := findAvailableTaskTx(ctx, tx, workerID, effectiveCapabilities(capabilities, trusted))
 	if err != nil {
 		return PollResult{}, err
 	}
@@ -431,6 +435,9 @@ func (s *Store) CompleteLease(
 		Action:            LeaseReceiptCompleted,
 		At:                completedAt,
 	}); err != nil {
+		return Lease{}, err
+	}
+	if err := recordCapabilityObservationsTx(ctx, tx, lease, result, completedAt); err != nil {
 		return Lease{}, err
 	}
 

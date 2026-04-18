@@ -382,6 +382,39 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS agent_message_events_message_sequence_idx
 			ON agent_message_events(message_id, sequence)`,
+		`CREATE TABLE IF NOT EXISTS capability_observations (
+			sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+			worker_id TEXT NOT NULL,
+			thread_id TEXT NOT NULL,
+			lease_id TEXT NOT NULL,
+			task_message_id TEXT NOT NULL,
+			result_message_id TEXT NOT NULL,
+			capability_id TEXT NOT NULL,
+			tool_name TEXT NOT NULL,
+			success INTEGER NOT NULL,
+			observed_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS capability_observations_lease_capability_unique
+			ON capability_observations(lease_id, capability_id)`,
+		`CREATE INDEX IF NOT EXISTS capability_observations_worker_observed_idx
+			ON capability_observations(worker_id, observed_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS worker_capabilities (
+			worker_id TEXT NOT NULL,
+			capability_id TEXT NOT NULL,
+			requirements_text TEXT NOT NULL,
+			risk_level TEXT NOT NULL,
+			trust_level TEXT NOT NULL,
+			observation_count INTEGER NOT NULL,
+			success_count INTEGER NOT NULL,
+			first_observed_at TEXT NOT NULL,
+			last_observed_at TEXT NOT NULL,
+			approved_by TEXT NOT NULL,
+			approved_at TEXT NOT NULL,
+			last_observed_tool TEXT NOT NULL,
+			PRIMARY KEY(worker_id, capability_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS worker_capabilities_worker_trust_idx
+			ON worker_capabilities(worker_id, trust_level, last_observed_at)`,
 	}
 
 	for _, statement := range statements {
