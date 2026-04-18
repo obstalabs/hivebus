@@ -26,6 +26,22 @@ func TestBoundarySplitsFreeAndCommercialRepos(t *testing.T) {
 	if boundary.RepoByTier[model.TierEnterprise] != "hivebus-pro" {
 		t.Fatalf("expected enterprise tier in hivebus-pro, got %q", boundary.RepoByTier[model.TierEnterprise])
 	}
+
+	if boundary.DeploymentTierBoundary {
+		t.Fatal("expected deployment location to stay outside the pricing boundary")
+	}
+
+	if boundary.DeploymentRule == "" {
+		t.Fatal("expected deployment rule to be documented")
+	}
+
+	if len(boundary.SupportedDeploymentModes) < 3 {
+		t.Fatalf("expected multiple supported deployment modes, got %#v", boundary.SupportedDeploymentModes)
+	}
+
+	if boundary.TierPositioningByTier[model.TierPro] == "" {
+		t.Fatal("expected pro tier positioning")
+	}
 }
 
 func TestRepoForTierReturnsConfiguredRepo(t *testing.T) {
@@ -55,5 +71,9 @@ func TestFeaturesExposeCommunityAndPaidSplit(t *testing.T) {
 
 	if !features.Workledger.Canonical {
 		t.Fatal("expected workledger to be canonical")
+	}
+
+	if features.DeploymentModel == "" {
+		t.Fatal("expected deployment model guidance")
 	}
 }

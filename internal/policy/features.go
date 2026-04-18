@@ -33,6 +33,7 @@ type WorkledgerContract struct {
 // FeatureBoundary declares which capabilities live in the community repo vs hivebus-pro.
 type FeatureBoundary struct {
 	Model             string              `json:"model"`
+	DeploymentModel   string              `json:"deployment_model"`
 	CommunityFeatures []FeatureDescriptor `json:"community_features"`
 	PaidOnlyFeatures  []FeatureDescriptor `json:"paid_only_features"`
 	Workledger        WorkledgerContract  `json:"workledger"`
@@ -59,7 +60,8 @@ func Features() FeatureBoundary {
 	}
 
 	return FeatureBoundary{
-		Model: "maintenance-focused community core in hivebus, paid-only capability in hivebus-pro",
+		Model:           "maintenance-focused community core in hivebus, paid-only capability in hivebus-pro",
+		DeploymentModel: "deployment location is not the pricing boundary; pro can run single-tenant anywhere, teams adds shared coordination, and enterprise adds corporate controls",
 		CommunityFeatures: []FeatureDescriptor{
 			{
 				ID:            "typed-thread-protocol",
@@ -71,7 +73,7 @@ func Features() FeatureBoundary {
 			{
 				ID:            "self-hosted-bus-core",
 				Name:          "Self-hosted bus core",
-				Description:   "The deterministic, self-hosted coordination core that agents can run without a hosted dependency.",
+				Description:   "The deterministic coordination core that remains self-hostable and deployment-flexible across local, Fly, VPS, or private infrastructure.",
 				Repo:          "hivebus",
 				IncludedTiers: allTiers,
 			},
@@ -108,7 +110,7 @@ func Features() FeatureBoundary {
 			{
 				ID:            "managed-control-plane",
 				Name:          "Managed control plane",
-				Description:   "Hosted relay, managed storage, and operations surfaces that remove self-hosting overhead.",
+				Description:   "Optional hosted relay, managed storage, and operations surfaces that remove self-hosting overhead without defining the Pro tier boundary.",
 				Repo:          "hivebus-pro",
 				IncludedTiers: paidTiers,
 			},
@@ -122,14 +124,14 @@ func Features() FeatureBoundary {
 			{
 				ID:            "team-org-policy",
 				Name:          "Team and org policy",
-				Description:   "Shared queues, RBAC, policy packs, and multi-operator coordination surfaces for teams.",
+				Description:   "Shared queues, RBAC, policy packs, and multi-operator coordination surfaces that make the Teams tier distinct from single-tenant Pro.",
 				Repo:          "hivebus-pro",
 				IncludedTiers: teamAndEnterpriseTiers,
 			},
 			{
 				ID:            "enterprise-compliance-pack",
 				Name:          "Enterprise compliance pack",
-				Description:   "BYOK, long retention, regional controls, and audit export surfaces for enterprise deployments.",
+				Description:   "BYOK, long retention, regional controls, and audit export surfaces that turn Enterprise into a governance tier rather than a hosting choice.",
 				Repo:          "hivebus-pro",
 				IncludedTiers: []model.Tier{model.TierEnterprise},
 			},

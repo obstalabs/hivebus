@@ -42,8 +42,24 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 		t.Fatalf("expected pro tier in hivebus-pro, got %q", document.EditionBoundary.RepoByTier["pro"])
 	}
 
+	if document.EditionBoundary.DeploymentTierBoundary {
+		t.Fatal("expected deployment to remain outside the tier boundary")
+	}
+
+	if document.EditionBoundary.TierPositioningByTier["pro"] == "" {
+		t.Fatal("expected pro tier positioning")
+	}
+
+	if len(document.EditionBoundary.SupportedDeploymentModes) < 3 {
+		t.Fatalf("expected deployment modes, got %#v", document.EditionBoundary.SupportedDeploymentModes)
+	}
+
 	if len(document.FeatureBoundary.CommunityFeatures) == 0 {
 		t.Fatal("expected community feature boundary")
+	}
+
+	if document.FeatureBoundary.DeploymentModel == "" {
+		t.Fatal("expected deployment model guidance")
 	}
 
 	if len(document.ArtifactManifestFields) != 3 {

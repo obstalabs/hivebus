@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Clarify that deployment location is not the edition boundary: Free stays self-hostable, Pro is single-tenant on any deployment target, Teams adds shared coordination, and Enterprise adds corporate controls.
+
 ## [0.1.1] - 2026-04-15
 
 - Add `hivebus serve` as the first runnable v0 HTTP runtime.

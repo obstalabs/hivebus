@@ -30,6 +30,8 @@ This repository follows the same model as `neurorouter-free`: it is the maintena
 
 Hivebus only becomes essential if it carries the whole path from issue intake to tracked execution. That means the free/community line is not a crippled toy: it includes the protocol core and the canonical `workledger` bridge. Paid tiers add hosted, commercial, org, and compliance layers on top.
 
+Deployment location is not the tier split. Free/core stays self-hostable, Pro can run single-tenant anywhere, Teams adds shared coordination, and Enterprise adds corporate controls. Local, Fly, VPS, and private infrastructure are all valid deployment targets.
+
 | Capability | Free | Pro | Teams | Enterprise | Repo |
 |------------|------|-----|-------|------------|------|
 | Typed JSON envelopes, threads, receipts, artifacts, and lifecycle state | yes | yes | yes | yes | `hivebus` |
@@ -147,14 +149,14 @@ Current code layout:
 
 ## Editions
 
-Hivebus keeps one protocol across all editions. The differences live in policy:
+Hivebus keeps one protocol across all editions. The differences live in coordination and policy complexity, not deployment topology:
 
-- `free`: smallest retention window and artifact limits for solo experiments, implemented in this `hivebus` repo.
-- `pro`: more room for production debugging and longer thread retention, implemented in `hivebus-pro`.
-- `teams`: larger routing fan-out and evidence bundles for shared operations, implemented in `hivebus-pro`.
-- `enterprise`: highest limits and long retention for compliance-heavy environments, implemented in `hivebus-pro`.
+- `free`: self-hostable protocol core, smallest retention window, and artifact limits for solo experiments, implemented in this `hivebus` repo.
+- `pro`: single-tenant production coordination with longer retention and commercial runtime capability, implemented in `hivebus-pro`, and deployable anywhere.
+- `teams`: shared coordination, multi-operator policy, and larger routing/evidence limits, implemented in `hivebus-pro`.
+- `enterprise`: corporate controls, compliance posture, and governance surfaces, implemented in `hivebus-pro`.
 
-This keeps the protocol shared while making the repo boundary explicit: free stays open here, non-free stays out of the OSS tree.
+This keeps the protocol shared while making the repo boundary explicit: free stays open here, non-free stays out of the OSS tree, and no edition requires a specific hosting location.
 
 ## Canonical Workledger Contract
 
