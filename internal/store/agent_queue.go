@@ -26,6 +26,7 @@ type AgentSession struct {
 	SessionID         string                   `json:"session_id"`
 	ParticipantID     string                   `json:"participant_id"`
 	Capabilities      []string                 `json:"capabilities,omitempty"`
+	Roles             []string                 `json:"roles,omitempty"`
 	DeliveryMode      model.AgentDeliveryMode  `json:"delivery_mode"`
 	SessionStatus     model.AgentSessionStatus `json:"session_status"`
 	LeaseExpiresAt    time.Time                `json:"lease_expires_at"`
@@ -40,6 +41,7 @@ type AgentMessageInput struct {
 	SenderSessionID     string `json:"sender_session_id"`
 	SenderParticipantID string `json:"sender_participant_id"`
 	TargetParticipantID string `json:"target_participant_id"`
+	ChannelID           string `json:"channel_id,omitempty"`
 	Body                string `json:"body"`
 	TTL                 time.Duration
 }
@@ -50,6 +52,7 @@ type AgentMessage struct {
 	SenderParticipantID string                     `json:"sender_participant_id"`
 	TargetParticipantID string                     `json:"target_participant_id"`
 	TargetAgentID       string                     `json:"target_agent_id,omitempty"`
+	ChannelID           string                     `json:"channel_id,omitempty"`
 	Body                string                     `json:"body"`
 	CreatedAt           time.Time                  `json:"created_at"`
 	ExpiresAt           time.Time                  `json:"expires_at"`
@@ -72,7 +75,88 @@ type AgentMessageEvent struct {
 
 type AgentMessageRecord struct {
 	Message AgentMessage        `json:"message"`
+	Channel *model.Channel      `json:"channel,omitempty"`
 	Events  []AgentMessageEvent `json:"events"`
+}
+
+var ErrChannelNotFound = errors.New("channel not found")
+
+func (s *Store) UpsertChannel(
+	ctx context.Context,
+	channel model.Channel,
+) (model.Channel, error) {
+	if s == nil || s.db == nil {
+		return model.Channel{}, errors.New("store is not initialized")
+	}
+	if err := channel.Validate(); err != nil {
+		return model.Channel{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO agent_channels (
+			channel_id,
+			display_name,
+			description,
+			restricted,
+			allowed_participants,
+			allowed_agents,
+			allowed_roles,
+			created_at,
+			updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(channel_id) DO UPDATE SET
+			display_name = excluded.display_name,
+			description = excluded.description,
+			restricted = excluded.restricted,
+			allowed_participants = excluded.allowed_participants,
+			allowed_agents = excluded.allowed_agents,
+			allowed_roles = excluded.allowed_roles,
+			updated_at = excluded.updated_at
+	`,
+		channel.ChannelID,
+		channel.DisplayName,
+		channel.Description,
+		boolToInt(channel.Restricted),
+		joinCapabilities(channel.AllowedParticipants),
+		joinCapabilities(channel.AllowedAgents),
+		joinCapabilities(channel.AllowedRoles),
+		formatTime(channel.CreatedAt),
+		formatTime(channel.UpdatedAt),
+	); err != nil {
+		return model.Channel{}, fmt.Errorf("upsert channel: %w", err)
+	}
+
+	return s.LoadChannel(ctx, channel.ChannelID)
+}
+
+func (s *Store) LoadChannel(ctx context.Context, channelID string) (model.Channel, error) {
+	if s == nil || s.db == nil {
+		return model.Channel{}, errors.New("store is not initialized")
+	}
+	if strings.TrimSpace(channelID) == "" {
+		return model.Channel{}, errors.New("channel_id is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return loadChannelRow(s.db.QueryRowContext(ctx, `
+		SELECT
+			channel_id,
+			display_name,
+			description,
+			restricted,
+			allowed_participants,
+			allowed_agents,
+			allowed_roles,
+			created_at,
+			updated_at
+		FROM agent_channels
+		WHERE channel_id = ?
+	`, channelID))
 }
 
 func (s *Store) RegisterAgentSession(
@@ -130,6 +214,7 @@ func (s *Store) RegisterAgentSession(
 			session_id,
 			participant_id,
 			capabilities_json,
+			roles_json,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -137,12 +222,13 @@ func (s *Store) RegisterAgentSession(
 			replaces_session_id,
 			registered_at,
 			last_seen_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			agent_id = excluded.agent_id,
 			installation_id = excluded.installation_id,
 			participant_id = excluded.participant_id,
 			capabilities_json = excluded.capabilities_json,
+			roles_json = excluded.roles_json,
 			delivery_mode = excluded.delivery_mode,
 			session_status = excluded.session_status,
 			lease_expires_at = excluded.lease_expires_at,
@@ -159,6 +245,7 @@ func (s *Store) RegisterAgentSession(
 		payload.SessionID,
 		payload.ParticipantID,
 		joinCapabilities(payload.Capabilities),
+		joinCapabilities(payload.Roles),
 		string(payload.DeliveryMode),
 		string(payload.SessionStatus),
 		formatTime(leaseExpiresAt),
@@ -177,6 +264,7 @@ func (s *Store) RegisterAgentSession(
 			session_id,
 			participant_id,
 			capabilities_json,
+			roles_json,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -232,6 +320,12 @@ func (s *Store) QueueAgentMessage(
 	}
 	expiresAt := now.Add(input.TTL)
 
+	if strings.TrimSpace(input.ChannelID) != "" {
+		if _, err := s.LoadChannel(ctx, input.ChannelID); err != nil {
+			return AgentMessageRecord{}, err
+		}
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AgentMessageRecord{}, fmt.Errorf("begin queue agent message transaction: %w", err)
@@ -272,6 +366,7 @@ func (s *Store) QueueAgentMessage(
 			sender_participant_id,
 			target_participant_id,
 			target_agent_id,
+			channel_id,
 			body,
 			created_at,
 			expires_at,
@@ -279,13 +374,14 @@ func (s *Store) QueueAgentMessage(
 			delivered_session_id,
 			delivered_at,
 			reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')
 	`,
 		input.MessageID,
 		input.SenderSessionID,
 		input.SenderParticipantID,
 		input.TargetParticipantID,
 		targetAgentID,
+		input.ChannelID,
 		input.Body,
 		formatTime(now),
 		formatTime(expiresAt),
@@ -367,6 +463,7 @@ func (s *Store) PeekAgentInbox(
 			session_id,
 			participant_id,
 			capabilities_json,
+			roles_json,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -389,8 +486,7 @@ func (s *Store) PeekAgentInbox(
 		FROM agent_messages
 		WHERE target_participant_id = ? AND state = ?
 		ORDER BY created_at ASC
-		LIMIT ?
-	`, session.ParticipantID, string(model.DeliveryReceiptQueued), limit)
+	`, session.ParticipantID, string(model.DeliveryReceiptQueued))
 	if err != nil {
 		return AgentSession{}, nil, fmt.Errorf("query queued inbox messages: %w", err)
 	}
@@ -408,7 +504,13 @@ func (s *Store) PeekAgentInbox(
 		if err != nil {
 			return AgentSession{}, nil, err
 		}
+		if !channelAllowsSession(record.Channel, session) {
+			continue
+		}
 		records = append(records, record)
+		if len(records) >= limit {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return AgentSession{}, nil, fmt.Errorf("iterate queued inbox messages: %w", err)
@@ -462,6 +564,7 @@ func (s *Store) DeliverAgentMessage(
 			session_id,
 			participant_id,
 			capabilities_json,
+			roles_json,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -489,6 +592,9 @@ func (s *Store) DeliverAgentMessage(
 	}
 	if record.Message.TargetParticipantID != session.ParticipantID {
 		return AgentMessageRecord{}, ErrAgentMessageWrongQueue
+	}
+	if !channelAllowsSession(record.Channel, session) {
+		return AgentMessageRecord{}, ErrAgentMessageNotFound
 	}
 
 	if _, err := tx.ExecContext(ctx, `
@@ -650,6 +756,7 @@ func queuedMessagePositionTx(ctx context.Context, tx *sql.Tx, targetParticipantI
 func loadAgentSessionRow(row *sql.Row) (AgentSession, error) {
 	var session AgentSession
 	var capabilities string
+	var roles string
 	var deliveryMode string
 	var sessionStatus string
 	var leaseExpiresAt string
@@ -661,6 +768,7 @@ func loadAgentSessionRow(row *sql.Row) (AgentSession, error) {
 		&session.SessionID,
 		&session.ParticipantID,
 		&capabilities,
+		&roles,
 		&deliveryMode,
 		&sessionStatus,
 		&leaseExpiresAt,
@@ -675,6 +783,7 @@ func loadAgentSessionRow(row *sql.Row) (AgentSession, error) {
 		return AgentSession{}, fmt.Errorf("scan agent session: %w", err)
 	}
 	session.Capabilities = splitCapabilities(capabilities)
+	session.Roles = splitCapabilities(roles)
 	session.DeliveryMode = model.AgentDeliveryMode(deliveryMode)
 	session.SessionStatus = model.AgentSessionStatus(sessionStatus)
 	session.LeaseExpiresAt = parseTime(leaseExpiresAt)
@@ -696,6 +805,7 @@ func loadAgentMessageRecordTx(ctx context.Context, tx *sql.Tx, messageID string)
 			sender_participant_id,
 			target_participant_id,
 			target_agent_id,
+			channel_id,
 			body,
 			created_at,
 			expires_at,
@@ -712,6 +822,7 @@ func loadAgentMessageRecordTx(ctx context.Context, tx *sql.Tx, messageID string)
 		&record.Message.SenderParticipantID,
 		&record.Message.TargetParticipantID,
 		&record.Message.TargetAgentID,
+		&record.Message.ChannelID,
 		&record.Message.Body,
 		&createdAt,
 		&expiresAt,
@@ -729,6 +840,26 @@ func loadAgentMessageRecordTx(ctx context.Context, tx *sql.Tx, messageID string)
 	record.Message.ExpiresAt = parseTime(expiresAt)
 	record.Message.State = model.DeliveryReceiptState(state)
 	record.Message.DeliveredAt = parseTime(deliveredAt)
+	if strings.TrimSpace(record.Message.ChannelID) != "" {
+		channel, err := loadChannelRow(tx.QueryRowContext(ctx, `
+			SELECT
+				channel_id,
+				display_name,
+				description,
+				restricted,
+				allowed_participants,
+				allowed_agents,
+				allowed_roles,
+				created_at,
+				updated_at
+			FROM agent_channels
+			WHERE channel_id = ?
+		`, record.Message.ChannelID))
+		if err != nil {
+			return AgentMessageRecord{}, err
+		}
+		record.Channel = &channel
+	}
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT sequence, event_at, state, target_session_id, reason, expires_at, queue_position
@@ -792,4 +923,68 @@ func splitCapabilities(value string) []string {
 		return nil
 	}
 	return strings.Split(value, "\n")
+}
+
+func loadChannelRow(row *sql.Row) (model.Channel, error) {
+	var channel model.Channel
+	var restricted int
+	var allowedParticipants string
+	var allowedAgents string
+	var allowedRoles string
+	var createdAt string
+	var updatedAt string
+	if err := row.Scan(
+		&channel.ChannelID,
+		&channel.DisplayName,
+		&channel.Description,
+		&restricted,
+		&allowedParticipants,
+		&allowedAgents,
+		&allowedRoles,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Channel{}, ErrChannelNotFound
+		}
+		return model.Channel{}, fmt.Errorf("scan channel: %w", err)
+	}
+	channel.Restricted = restricted != 0
+	channel.AllowedParticipants = splitCapabilities(allowedParticipants)
+	channel.AllowedAgents = splitCapabilities(allowedAgents)
+	channel.AllowedRoles = splitCapabilities(allowedRoles)
+	channel.CreatedAt = parseTime(createdAt)
+	channel.UpdatedAt = parseTime(updatedAt)
+	return channel, nil
+}
+
+func channelAllowsSession(channel *model.Channel, session AgentSession) bool {
+	if channel == nil || !channel.Restricted {
+		return true
+	}
+	for _, participantID := range channel.AllowedParticipants {
+		if participantID == session.ParticipantID {
+			return true
+		}
+	}
+	for _, agentID := range channel.AllowedAgents {
+		if agentID == session.AgentID {
+			return true
+		}
+	}
+	for _, allowedRole := range channel.AllowedRoles {
+		for _, sessionRole := range session.Roles {
+			if allowedRole == sessionRole {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

@@ -51,6 +51,8 @@ func NewHandlerWithOptions(
 	mux.HandleFunc("POST /v0/agents/sessions/register", withAuth(keys, RoleWorker, srv.handleRegisterAgentSession))
 	mux.HandleFunc("POST /v0/agents/sessions/heartbeat", withAuth(keys, RoleWorker, srv.handleHeartbeatAgentSession))
 	mux.HandleFunc("GET /v0/agents/sessions/{sessionID}/inbox", withAuth(keys, RoleWorker, srv.handlePeekAgentInbox))
+	mux.HandleFunc("POST /v0/channels", withAuth(keys, RoleOperator, srv.handleUpsertChannel))
+	mux.HandleFunc("GET /v0/channels/{channelID}", withAuth(keys, RoleOperator, srv.handleGetChannel))
 	mux.HandleFunc("POST /v0/agents/messages/send", withAuth(keys, RoleOperator, srv.handleSendAgentMessage))
 	mux.HandleFunc("GET /v0/agents/messages/{messageID}", withAuth(keys, RoleOperator, srv.handleGetAgentMessage))
 	mux.HandleFunc("POST /v0/agents/messages/{messageID}/deliver", withAuth(keys, RoleWorker, srv.handleDeliverAgentMessage))

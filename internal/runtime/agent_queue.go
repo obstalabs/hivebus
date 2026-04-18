@@ -22,6 +22,7 @@ type sendAgentMessageRequest struct {
 	SenderSessionID     string `json:"sender_session_id"`
 	SenderParticipantID string `json:"sender_participant_id"`
 	TargetParticipantID string `json:"target_participant_id"`
+	ChannelID           string `json:"channel_id,omitempty"`
 	Body                string `json:"body"`
 	TTLSeconds          int    `json:"ttl_seconds,omitempty"`
 }
@@ -30,6 +31,11 @@ type sendAgentMessageResponse struct {
 	Status  string                       `json:"status"`
 	Message store.AgentMessage           `json:"message"`
 	Receipt model.DeliveryReceiptPayload `json:"receipt"`
+}
+
+type upsertChannelResponse struct {
+	Status  string        `json:"status"`
+	Channel model.Channel `json:"channel"`
 }
 
 type inboxResponse struct {
@@ -117,10 +123,13 @@ func (s *server) handleSendAgentMessage(w http.ResponseWriter, r *http.Request) 
 		SenderSessionID:     request.SenderSessionID,
 		SenderParticipantID: request.SenderParticipantID,
 		TargetParticipantID: request.TargetParticipantID,
+		ChannelID:           request.ChannelID,
 		Body:                request.Body,
 		TTL:                 ttl,
 	}, currentTime())
 	switch {
+	case errors.Is(err, store.ErrChannelNotFound):
+		writeError(w, http.StatusNotFound, err)
 	case err != nil && isInputError(err):
 		writeError(w, http.StatusBadRequest, err)
 	case err != nil:
@@ -132,6 +141,49 @@ func (s *server) handleSendAgentMessage(w http.ResponseWriter, r *http.Request) 
 			Message: record.Message,
 			Receipt: receipt,
 		})
+	}
+}
+
+func (s *server) handleUpsertChannel(w http.ResponseWriter, r *http.Request) {
+	var channel model.Channel
+	if err := decodeJSON(r.Body, &channel); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	now := currentTime()
+	if channel.CreatedAt.IsZero() {
+		channel.CreatedAt = now
+	}
+	if channel.UpdatedAt.IsZero() || channel.UpdatedAt.Before(channel.CreatedAt) {
+		channel.UpdatedAt = now
+	}
+
+	stored, err := s.store.UpsertChannel(r.Context(), channel)
+	switch {
+	case err != nil && isInputError(err):
+		writeError(w, http.StatusBadRequest, err)
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err)
+	default:
+		writeJSON(w, http.StatusCreated, upsertChannelResponse{
+			Status:  "stored",
+			Channel: stored,
+		})
+	}
+}
+
+func (s *server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
+	channel, err := s.store.LoadChannel(r.Context(), r.PathValue("channelID"))
+	switch {
+	case errors.Is(err, store.ErrChannelNotFound):
+		writeError(w, http.StatusNotFound, err)
+	case err != nil && isInputError(err):
+		writeError(w, http.StatusBadRequest, err)
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err)
+	default:
+		writeJSON(w, http.StatusOK, channel)
 	}
 }
 

@@ -126,7 +126,7 @@ func TestAgentMessagingRequiresMatchingQueueOnDeliver(t *testing.T) {
 
 	mustRegisterAgentSession(t, handler, "sess_nullbot_001", "agent.field.nullbot")
 	mustRegisterAgentSession(t, handler, "sess_other_001", "agent.other")
-	mustSendAgentMessage(t, handler, "msg_agent_conflict", "agent.field.nullbot")
+	mustSendAgentMessage(t, handler, "msg_agent_conflict", "agent.field.nullbot", "")
 
 	deliverBody := marshalJSON(t, deliverAgentMessageRequest{SessionID: "sess_other_001"})
 	deliverReq := httptest.NewRequest(
@@ -143,11 +143,126 @@ func TestAgentMessagingRequiresMatchingQueueOnDeliver(t *testing.T) {
 	}
 }
 
+func TestRestrictedChannelHiddenFromUnauthorizedAgentOverHTTP(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
+
+	channelBody := marshalJSON(t, model.Channel{
+		ChannelID:   "security-private",
+		DisplayName: "Security Private",
+		Restricted:  true,
+		AllowedRoles: []string{
+			"security",
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	channelReq := httptest.NewRequest(http.MethodPost, "/v0/channels", bytes.NewReader(channelBody))
+	channelReq.Header.Set("Content-Type", "application/json")
+	channelReq.Header.Set("Authorization", "Bearer operator-secret")
+	channelRec := httptest.NewRecorder()
+	handler.ServeHTTP(channelRec, channelReq)
+	if channelRec.Code != http.StatusCreated {
+		t.Fatalf("channel create status = %d, body = %s", channelRec.Code, channelRec.Body.String())
+	}
+
+	mustRegisterAgentSession(t, handler, "sess_nullbot_001", "agent.field.nullbot")
+	mustSendAgentMessage(t, handler, "msg_agent_hidden", "agent.field.nullbot", "security-private")
+
+	inboxReq := httptest.NewRequest(http.MethodGet, "/v0/agents/sessions/sess_nullbot_001/inbox", nil)
+	inboxReq.Header.Set("Authorization", "Bearer worker-secret")
+	inboxRec := httptest.NewRecorder()
+	handler.ServeHTTP(inboxRec, inboxReq)
+	if inboxRec.Code != http.StatusOK {
+		t.Fatalf("hidden inbox status = %d, body = %s", inboxRec.Code, inboxRec.Body.String())
+	}
+
+	var hiddenInbox inboxResponse
+	if err := json.Unmarshal(inboxRec.Body.Bytes(), &hiddenInbox); err != nil {
+		t.Fatalf("Unmarshal(hiddenInbox) error = %v", err)
+	}
+	if len(hiddenInbox.Messages) != 0 {
+		t.Fatalf("expected hidden restricted inbox, got %#v", hiddenInbox.Messages)
+	}
+
+	mustRegisterAgentSession(t, handler, "sess_nullbot_secure", "agent.field.nullbot", "security")
+
+	secureReq := httptest.NewRequest(http.MethodGet, "/v0/agents/sessions/sess_nullbot_secure/inbox", nil)
+	secureReq.Header.Set("Authorization", "Bearer worker-secret")
+	secureRec := httptest.NewRecorder()
+	handler.ServeHTTP(secureRec, secureReq)
+	if secureRec.Code != http.StatusOK {
+		t.Fatalf("secure inbox status = %d, body = %s", secureRec.Code, secureRec.Body.String())
+	}
+
+	var secureInbox inboxResponse
+	if err := json.Unmarshal(secureRec.Body.Bytes(), &secureInbox); err != nil {
+		t.Fatalf("Unmarshal(secureInbox) error = %v", err)
+	}
+	if len(secureInbox.Messages) != 1 || secureInbox.Messages[0].Message.ChannelID != "security-private" {
+		t.Fatalf("expected secure restricted message, got %#v", secureInbox.Messages)
+	}
+
+	deliverBody := marshalJSON(t, deliverAgentMessageRequest{SessionID: "sess_nullbot_001"})
+	deliverReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v0/agents/messages/msg_agent_hidden/deliver",
+		bytes.NewReader(deliverBody),
+	)
+	deliverReq.Header.Set("Content-Type", "application/json")
+	deliverReq.Header.Set("Authorization", "Bearer worker-secret")
+	deliverRec := httptest.NewRecorder()
+	handler.ServeHTTP(deliverRec, deliverReq)
+	if deliverRec.Code != http.StatusNotFound {
+		t.Fatalf("unauthorized deliver status = %d, body = %s", deliverRec.Code, deliverRec.Body.String())
+	}
+}
+
+func TestChannelEndpointsRequireOperator(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
+
+	channelBody := marshalJSON(t, model.Channel{
+		ChannelID:   "security-private",
+		DisplayName: "Security Private",
+		Restricted:  true,
+		AllowedRoles: []string{
+			"security",
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v0/channels", bytes.NewReader(channelBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.Header.Set("Authorization", "Bearer worker-secret")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusForbidden {
+		t.Fatalf("worker channel create status = %d, body = %s", createRec.Code, createRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v0/channels/security-private", nil)
+	getReq.Header.Set("Authorization", "Bearer worker-secret")
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusForbidden {
+		t.Fatalf("worker channel get status = %d, body = %s", getRec.Code, getRec.Body.String())
+	}
+}
+
 func mustRegisterAgentSession(
 	t *testing.T,
 	handler http.Handler,
 	sessionID string,
 	participantID string,
+	roles ...string,
 ) {
 	t.Helper()
 
@@ -157,6 +272,7 @@ func mustRegisterAgentSession(
 		SessionID:      sessionID,
 		ParticipantID:  participantID,
 		Capabilities:   []string{"clarification.reply"},
+		Roles:          roles,
 		DeliveryMode:   model.AgentDeliveryQueued,
 		SessionStatus:  model.AgentSessionOnline,
 		LeaseExpiresAt: time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
@@ -171,7 +287,13 @@ func mustRegisterAgentSession(
 	}
 }
 
-func mustSendAgentMessage(t *testing.T, handler http.Handler, messageID string, targetParticipantID string) {
+func mustSendAgentMessage(
+	t *testing.T,
+	handler http.Handler,
+	messageID string,
+	targetParticipantID string,
+	channelID string,
+) {
 	t.Helper()
 
 	sendBody := marshalJSON(t, sendAgentMessageRequest{
@@ -179,6 +301,7 @@ func mustSendAgentMessage(t *testing.T, handler http.Handler, messageID string, 
 		SenderSessionID:     "sess_dispatch_001",
 		SenderParticipantID: "agent.dispatch",
 		TargetParticipantID: targetParticipantID,
+		ChannelID:           channelID,
 		Body:                "Heads up from another agent.",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v0/agents/messages/send", bytes.NewReader(sendBody))

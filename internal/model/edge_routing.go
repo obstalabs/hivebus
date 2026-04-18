@@ -59,6 +59,7 @@ type AgentSessionPayload struct {
 	SessionID         string             `json:"session_id"`
 	ParticipantID     string             `json:"participant_id"`
 	Capabilities      []string           `json:"capabilities,omitempty"`
+	Roles             []string           `json:"roles,omitempty"`
 	DeliveryMode      AgentDeliveryMode  `json:"delivery_mode"`
 	SessionStatus     AgentSessionStatus `json:"session_status"`
 	LeaseExpiresAt    string             `json:"lease_expires_at"`
@@ -98,6 +99,18 @@ func (p AgentSessionPayload) Validate(eventType MessageType) error {
 			return fmt.Errorf("duplicate capability %q", capability)
 		}
 		seenCapabilities[capability] = struct{}{}
+	}
+
+	seenRoles := make(map[string]struct{}, len(p.Roles))
+	for _, role := range p.Roles {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			return errors.New("roles contains an empty role")
+		}
+		if _, exists := seenRoles[role]; exists {
+			return fmt.Errorf("duplicate role %q", role)
+		}
+		seenRoles[role] = struct{}{}
 	}
 
 	switch eventType {

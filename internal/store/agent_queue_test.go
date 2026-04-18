@@ -164,6 +164,129 @@ func TestQueueAgentMessageExpiresBeforeDelivery(t *testing.T) {
 	}
 }
 
+func TestPeekAgentInboxHidesRestrictedChannelFromUnauthorizedSession(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	now := time.Date(2026, 4, 18, 4, 0, 0, 0, time.UTC)
+
+	channel, err := st.UpsertChannel(t.Context(), model.Channel{
+		ChannelID:   "security-private",
+		DisplayName: "Security Private",
+		Restricted:  true,
+		AllowedRoles: []string{
+			"security",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("UpsertChannel() error = %v", err)
+	}
+	if channel.ChannelID != "security-private" {
+		t.Fatalf("expected stored channel, got %#v", channel)
+	}
+
+	if _, err := st.RegisterAgentSession(
+		t.Context(),
+		sampleAgentSessionPayload("sess_nullbot_public", "agent.field.nullbot", now.Add(30*time.Minute)),
+		model.MessageTypeAgentSessionRegistered,
+		now,
+	); err != nil {
+		t.Fatalf("RegisterAgentSession(public) error = %v", err)
+	}
+
+	if _, err := st.QueueAgentMessage(t.Context(), AgentMessageInput{
+		MessageID:           "msg_agent_secret",
+		SenderSessionID:     "sess_dispatch_001",
+		SenderParticipantID: "agent.dispatch",
+		TargetParticipantID: "agent.field.nullbot",
+		ChannelID:           "security-private",
+		Body:                "Private security findings.",
+		TTL:                 time.Hour,
+	}, now.Add(1*time.Minute)); err != nil {
+		t.Fatalf("QueueAgentMessage() error = %v", err)
+	}
+
+	_, publicInbox, err := st.PeekAgentInbox(t.Context(), "sess_nullbot_public", now.Add(2*time.Minute), 10)
+	if err != nil {
+		t.Fatalf("PeekAgentInbox(public) error = %v", err)
+	}
+	if len(publicInbox) != 0 {
+		t.Fatalf("expected hidden restricted inbox, got %#v", publicInbox)
+	}
+
+	securePayload := sampleAgentSessionPayload("sess_nullbot_secure", "agent.field.nullbot", now.Add(30*time.Minute))
+	securePayload.Roles = []string{"security"}
+	if _, err := st.RegisterAgentSession(
+		t.Context(),
+		securePayload,
+		model.MessageTypeAgentSessionRegistered,
+		now.Add(3*time.Minute),
+	); err != nil {
+		t.Fatalf("RegisterAgentSession(secure) error = %v", err)
+	}
+
+	_, secureInbox, err := st.PeekAgentInbox(t.Context(), "sess_nullbot_secure", now.Add(4*time.Minute), 10)
+	if err != nil {
+		t.Fatalf("PeekAgentInbox(secure) error = %v", err)
+	}
+	if len(secureInbox) != 1 || secureInbox[0].Message.ChannelID != "security-private" {
+		t.Fatalf("expected secure inbox message, got %#v", secureInbox)
+	}
+}
+
+func TestDeliverAgentMessageHidesRestrictedChannelFromUnauthorizedSession(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	now := time.Date(2026, 4, 18, 5, 0, 0, 0, time.UTC)
+
+	if _, err := st.UpsertChannel(t.Context(), model.Channel{
+		ChannelID:   "security-private",
+		DisplayName: "Security Private",
+		Restricted:  true,
+		AllowedRoles: []string{
+			"security",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertChannel() error = %v", err)
+	}
+
+	if _, err := st.RegisterAgentSession(
+		t.Context(),
+		sampleAgentSessionPayload("sess_nullbot_public", "agent.field.nullbot", now.Add(30*time.Minute)),
+		model.MessageTypeAgentSessionRegistered,
+		now,
+	); err != nil {
+		t.Fatalf("RegisterAgentSession(public) error = %v", err)
+	}
+
+	if _, err := st.QueueAgentMessage(t.Context(), AgentMessageInput{
+		MessageID:           "msg_agent_secret_deliver",
+		SenderSessionID:     "sess_dispatch_001",
+		SenderParticipantID: "agent.dispatch",
+		TargetParticipantID: "agent.field.nullbot",
+		ChannelID:           "security-private",
+		Body:                "Private delivery path.",
+		TTL:                 time.Hour,
+	}, now.Add(time.Minute)); err != nil {
+		t.Fatalf("QueueAgentMessage() error = %v", err)
+	}
+
+	_, err := st.DeliverAgentMessage(
+		t.Context(),
+		"msg_agent_secret_deliver",
+		"sess_nullbot_public",
+		now.Add(2*time.Minute),
+	)
+	if !errors.Is(err, ErrAgentMessageNotFound) {
+		t.Fatalf("DeliverAgentMessage() error = %v, want %v", err, ErrAgentMessageNotFound)
+	}
+}
+
 func sampleAgentSessionPayload(sessionID string, participantID string, leaseUntil time.Time) model.AgentSessionPayload {
 	return model.AgentSessionPayload{
 		AgentID:        "nullbot-edge",

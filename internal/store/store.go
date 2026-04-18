@@ -331,6 +331,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			session_id TEXT PRIMARY KEY,
 			participant_id TEXT NOT NULL,
 			capabilities_json TEXT NOT NULL,
+			roles_json TEXT NOT NULL DEFAULT '',
 			delivery_mode TEXT NOT NULL,
 			session_status TEXT NOT NULL,
 			lease_expires_at TEXT NOT NULL,
@@ -341,12 +342,24 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS agent_sessions_participant_status_idx
 			ON agent_sessions(participant_id, session_status, lease_expires_at, last_seen_at)`,
+		`CREATE TABLE IF NOT EXISTS agent_channels (
+			channel_id TEXT PRIMARY KEY,
+			display_name TEXT NOT NULL,
+			description TEXT NOT NULL,
+			restricted INTEGER NOT NULL,
+			allowed_participants TEXT NOT NULL,
+			allowed_agents TEXT NOT NULL,
+			allowed_roles TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS agent_messages (
 			message_id TEXT PRIMARY KEY,
 			sender_session_id TEXT NOT NULL,
 			sender_participant_id TEXT NOT NULL,
 			target_participant_id TEXT NOT NULL,
 			target_agent_id TEXT NOT NULL,
+			channel_id TEXT NOT NULL DEFAULT '',
 			body TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			expires_at TEXT NOT NULL,
@@ -377,6 +390,17 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	if err := execIgnoreDuplicateColumn(ctx, db, `
+		ALTER TABLE agent_sessions ADD COLUMN roles_json TEXT NOT NULL DEFAULT ''
+	`); err != nil {
+		return err
+	}
+	if err := execIgnoreDuplicateColumn(ctx, db, `
+		ALTER TABLE agent_messages ADD COLUMN channel_id TEXT NOT NULL DEFAULT ''
+	`); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -400,6 +424,16 @@ func mapInsertError(err error) error {
 	default:
 		return err
 	}
+}
+
+func execIgnoreDuplicateColumn(ctx context.Context, db *sql.DB, statement string) error {
+	if _, err := db.ExecContext(ctx, statement); err != nil {
+		if strings.Contains(err.Error(), "duplicate column name") {
+			return nil
+		}
+		return fmt.Errorf("migrate sqlite store: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) eventExists(ctx context.Context, predicate string, args ...any) (bool, error) {
