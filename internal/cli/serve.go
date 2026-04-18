@@ -52,7 +52,7 @@ func newServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&listenAddr, "listen", "127.0.0.1:7081", "Listen address for the HTTP runtime")
 	cmd.Flags().StringVar(&dbPath, "db", "", "Path to the SQLite event log")
 	cmd.Flags().StringVar(&artifactsDir, "artifacts-dir", "", "Path to the local artifact store")
-	cmd.Flags().StringVar(&tokensFile, "tokens-file", "", "Path to a JSON file containing hashed operator and worker tokens")
+	cmd.Flags().StringVar(&tokensFile, "tokens-file", "", "Path to a JSON file containing hashed operator and worker tokens for local auth fallback")
 	cmd.Flags().BoolVar(&authDisabled, "auth-disabled", false, "Disable runtime auth explicitly for local development")
 
 	return cmd
@@ -166,6 +166,7 @@ func loadWorkOrderBridgeFromEnv() (runtime.WorkOrderBridge, error) {
 func loadKeyStore(tokensFile string, authDisabled bool) (*runtime.KeyStore, error) {
 	envTokensJSON := os.Getenv("HIVEBUS_TOKENS_JSON")
 	envTokensFile := os.Getenv("HIVEBUS_TOKENS_FILE")
+	envVerifyKey := os.Getenv("HIVEBUS_API_VERIFY_KEY")
 
 	var configuredSources int
 	if tokensFile != "" {
@@ -177,8 +178,11 @@ func loadKeyStore(tokensFile string, authDisabled bool) (*runtime.KeyStore, erro
 	if envTokensFile != "" {
 		configuredSources++
 	}
+	if strings.TrimSpace(envVerifyKey) != "" {
+		configuredSources++
+	}
 	if configuredSources > 1 {
-		return nil, errors.New("configure auth from exactly one source: --tokens-file, HIVEBUS_TOKENS_FILE, or HIVEBUS_TOKENS_JSON")
+		return nil, errors.New("configure auth from exactly one source: --tokens-file, HIVEBUS_TOKENS_FILE, HIVEBUS_TOKENS_JSON, or HIVEBUS_API_VERIFY_KEY")
 	}
 	if authDisabled {
 		if configuredSources > 0 {
@@ -195,7 +199,11 @@ func loadKeyStore(tokensFile string, authDisabled bool) (*runtime.KeyStore, erro
 		return runtime.LoadKeyStore(tokensFile)
 	case envTokensJSON != "":
 		return runtime.ParseKeyStore([]byte(envTokensJSON))
+	case strings.TrimSpace(envVerifyKey) != "":
+		return runtime.NewSignedKeyStore(envVerifyKey)
+	case strings.TrimSpace(runtime.BuiltInAPIVerifyKey) != "":
+		return runtime.NewSignedKeyStore(runtime.BuiltInAPIVerifyKey)
 	default:
-		return nil, errors.New("auth requires token configuration unless --auth-disabled is set")
+		return nil, errors.New("auth requires HIVEBUS_API_VERIFY_KEY, a build-time verify key, or token configuration unless --auth-disabled is set")
 	}
 }

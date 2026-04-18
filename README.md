@@ -98,6 +98,19 @@ Run the v0 HTTP runtime with a SQLite append-only event log:
 ./bin/hivebus serve --listen 127.0.0.1:7081 --db /tmp/hivebus.db
 ```
 
+Run the runtime with self-validating Ed25519 API keys:
+
+```bash
+HIVEBUS_API_VERIFY_KEY=<base64-ed25519-public-key> \
+  ./bin/hivebus serve --listen 127.0.0.1:7081 --db /tmp/hivebus.db
+```
+
+Release builds can embed the same public verify key at build time:
+
+```bash
+HIVEBUS_API_VERIFY_KEY=<base64-ed25519-public-key> make build
+```
+
 ## Architecture
 
 ```text
@@ -167,7 +180,7 @@ Adaptive Optimization is also paid-only. It is the background intelligence layer
 - The workledger bridge requires explicit `WORKLEDGER_URL` or `WORKLEDGER_HOST` plus `WORKLEDGER_API_KEY` configuration on the runtime host.
 - Optional `hiveram.com` sync is exposed as a hook surface, not a bundled free-runtime integration.
 - Capability routing is still declarative rather than runtime-driven.
-- Runtime auth now exists for operator and worker tokens, but it is still local-token based rather than org/hosted identity aware.
+- Runtime auth validates Ed25519-signed API keys locally, with hashed token files retained only as an explicit local fallback.
 
 ## Roadmap
 

@@ -4,7 +4,7 @@ VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 
 VERSION_NUM := $(VERSION:v%=%)
 COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 BUILD_DATE  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS     := -X $(MODULE)/internal/cli.Version=$(VERSION_NUM) -X $(MODULE)/internal/cli.Commit=$(COMMIT) -X $(MODULE)/internal/cli.BuildDate=$(BUILD_DATE)
+LDFLAGS     := -X $(MODULE)/internal/cli.Version=$(VERSION_NUM) -X $(MODULE)/internal/cli.Commit=$(COMMIT) -X $(MODULE)/internal/cli.BuildDate=$(BUILD_DATE) -X $(MODULE)/internal/runtime.BuiltInAPIVerifyKey=$(HIVEBUS_API_VERIFY_KEY)
 
 .PHONY: build test lint vet clean
 
