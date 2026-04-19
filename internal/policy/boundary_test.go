@@ -1,8 +1,10 @@
 package policy
 
 import (
+	"slices"
 	"testing"
 
+	"github.com/ppiankov/hivebus/internal/licensing"
 	"github.com/ppiankov/hivebus/internal/model"
 )
 
@@ -41,6 +43,37 @@ func TestBoundarySplitsFreeAndCommercialRepos(t *testing.T) {
 
 	if boundary.TierPositioningByTier[model.TierPro] == "" {
 		t.Fatal("expected pro tier positioning")
+	}
+}
+
+func TestBoundaryDocumentsSharedBillingContract(t *testing.T) {
+	t.Helper()
+
+	billing := Boundary().Billing
+
+	if billing.RequiredForCoreRuntime {
+		t.Fatal("expected billing to stay optional for core runtime")
+	}
+	if billing.LicensePrefix != licensing.LicensePrefix {
+		t.Fatalf("expected shared license prefix %q, got %q", licensing.LicensePrefix, billing.LicensePrefix)
+	}
+	if billing.VerifyKeyEnv != licensing.VerifyKeyEnv {
+		t.Fatalf("expected verify key env %q, got %q", licensing.VerifyKeyEnv, billing.VerifyKeyEnv)
+	}
+	if billing.ProductEntitlement != licensing.ProductName {
+		t.Fatalf("expected hivebus product entitlement, got %q", billing.ProductEntitlement)
+	}
+	if billing.EntitlementField != "products[]" {
+		t.Fatalf("expected products[] entitlement field, got %q", billing.EntitlementField)
+	}
+	if billing.CheckoutEndpoint != "/v1/billing/checkout" {
+		t.Fatalf("expected checkout endpoint, got %q", billing.CheckoutEndpoint)
+	}
+	if billing.LicenseEndpoint != "/v1/billing/license" {
+		t.Fatalf("expected license retrieval endpoint, got %q", billing.LicenseEndpoint)
+	}
+	if !slices.Contains(billing.RejectedLegacyPrefixes, "hb_") {
+		t.Fatalf("expected old hb_ keys to be rejected, got %#v", billing.RejectedLegacyPrefixes)
 	}
 }
 

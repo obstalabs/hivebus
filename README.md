@@ -26,6 +26,14 @@ This repository follows the same model as `neurorouter-free`: it is the maintena
 - `hivebus-pro` owns paid-only capability
 - new product capability does not land here by default unless a tracked work order explicitly expands the public boundary
 
+Commercial editions use the shared Obstalabs billing contract:
+
+- the billing service issues unified `ol_` license keys, not product-prefixed `hb_` keys
+- commercial Hivebus surfaces verify licenses with `OL_LICENSE_VERIFY_KEY`
+- the signed payload contains `products[]`; Hivebus requires an entry with `p=hivebus` and reads its tier from `t`
+- checkout starts at `/v1/billing/checkout`, post-checkout license retrieval uses `/v1/billing/license`, and account management uses the billing portal
+- this open-source runtime keeps working without billing unless a commercial integration explicitly calls the license verifier
+
 ## Community Vs Paid
 
 Hivebus only becomes essential if it carries the whole path from issue intake to tracked execution. That means the free/community line is not a crippled toy: it includes the protocol core and the canonical `workledger` bridge. Paid tiers add hosted, commercial, org, and compliance layers on top.
@@ -112,12 +120,6 @@ Release builds can embed the same public verify key at build time:
 ```bash
 HIVEBUS_API_VERIFY_KEY=<base64-ed25519-public-key> make build
 ```
-
-Commercial license checks use the shared Obstalabs license format, not product-specific
-keys. A commercial integration should verify `ol_` keys with `OL_LICENSE_VERIFY_KEY`
-and require a `hivebus` entitlement in the signed `products[]` payload. The open-source
-runtime does not require this key unless a commercial surface explicitly calls the
-license verifier.
 
 ## Architecture
 

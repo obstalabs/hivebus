@@ -91,7 +91,7 @@ func TestVerifyHivebusRejectsOldHivebusPrefix(t *testing.T) {
 		Products:  []ProductEntitlement{{Product: "hivebus", Tier: model.TierPro}},
 		ExpiresAt: time.Now().UTC().Add(time.Hour).Unix(),
 	})
-	oldKey := "hb_" + strings.TrimPrefix(key, licensePrefix)
+	oldKey := "hb_" + strings.TrimPrefix(key, LicensePrefix)
 
 	if _, err := verifier.VerifyHivebus(oldKey); err == nil {
 		t.Fatal("expected old hb_ key to be rejected")
@@ -160,5 +160,5 @@ func signLicense(t *testing.T, privateKey ed25519.PrivateKey, payload Payload) s
 	encoded := base64.RawURLEncoding.EncodeToString(data)
 	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(encoded)))
 
-	return licensePrefix + encoded + "." + signature
+	return LicensePrefix + encoded + "." + signature
 }

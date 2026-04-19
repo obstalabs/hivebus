@@ -16,8 +16,11 @@ const (
 	// VerifyKeyEnv is the shared Obstalabs license verification key env var.
 	VerifyKeyEnv = "OL_LICENSE_VERIFY_KEY"
 
-	licensePrefix  = "ol_"
-	hivebusProduct = "hivebus"
+	// LicensePrefix is the shared Obstalabs license key prefix.
+	LicensePrefix = "ol_"
+
+	// ProductName is the product entitlement name Hivebus requires.
+	ProductName = "hivebus"
 )
 
 // ProductEntitlement is one product+tier grant in a unified Obstalabs license.
@@ -105,11 +108,11 @@ func (v *Verifier) VerifyHivebusAt(rawKey string, now time.Time) (VerifiedLicens
 
 func splitLicenseKey(rawKey string) (string, []byte, error) {
 	key := strings.TrimSpace(rawKey)
-	if !strings.HasPrefix(key, licensePrefix) {
-		return "", nil, fmt.Errorf("license key must use %s prefix", licensePrefix)
+	if !strings.HasPrefix(key, LicensePrefix) {
+		return "", nil, fmt.Errorf("license key must use %s prefix", LicensePrefix)
 	}
 
-	parts := strings.Split(strings.TrimPrefix(key, licensePrefix), ".")
+	parts := strings.Split(strings.TrimPrefix(key, LicensePrefix), ".")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", nil, fmt.Errorf("license key must contain payload and signature")
 	}
@@ -137,7 +140,7 @@ func (payload Payload) hivebusEntitlement(now time.Time) (ProductEntitlement, er
 	}
 
 	for _, entitlement := range payload.Products {
-		if strings.TrimSpace(entitlement.Product) != hivebusProduct {
+		if strings.TrimSpace(entitlement.Product) != ProductName {
 			continue
 		}
 		if err := validateTier(entitlement.Tier); err != nil {
@@ -146,7 +149,7 @@ func (payload Payload) hivebusEntitlement(now time.Time) (ProductEntitlement, er
 		return entitlement, nil
 	}
 
-	return ProductEntitlement{}, fmt.Errorf("license does not include %s entitlement", hivebusProduct)
+	return ProductEntitlement{}, fmt.Errorf("license does not include %s entitlement", ProductName)
 }
 
 func validateTier(tier model.Tier) error {
