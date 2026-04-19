@@ -113,6 +113,12 @@ Release builds can embed the same public verify key at build time:
 HIVEBUS_API_VERIFY_KEY=<base64-ed25519-public-key> make build
 ```
 
+Commercial license checks use the shared Obstalabs license format, not product-specific
+keys. A commercial integration should verify `ol_` keys with `OL_LICENSE_VERIFY_KEY`
+and require a `hivebus` entitlement in the signed `products[]` payload. The open-source
+runtime does not require this key unless a commercial surface explicitly calls the
+license verifier.
+
 ## Architecture
 
 ```text

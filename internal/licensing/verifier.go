@@ -1,0 +1,184 @@
+package licensing
+
+import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/ppiankov/hivebus/internal/model"
+)
+
+const (
+	// VerifyKeyEnv is the shared Obstalabs license verification key env var.
+	VerifyKeyEnv = "OL_LICENSE_VERIFY_KEY"
+
+	licensePrefix  = "ol_"
+	hivebusProduct = "hivebus"
+)
+
+// ProductEntitlement is one product+tier grant in a unified Obstalabs license.
+type ProductEntitlement struct {
+	Product string     `json:"p"`
+	Tier    model.Tier `json:"t"`
+}
+
+// Payload is the signed claim set embedded in a unified license key.
+type Payload struct {
+	Products  []ProductEntitlement `json:"products"`
+	Email     string               `json:"e,omitempty"`
+	ExpiresAt int64                `json:"x"`
+	SubID     string               `json:"s,omitempty"`
+}
+
+// VerifiedLicense is the Hivebus entitlement extracted from a valid license.
+type VerifiedLicense struct {
+	Payload     Payload
+	Entitlement ProductEntitlement
+}
+
+// Verifier checks unified Obstalabs ol_ license keys.
+type Verifier struct {
+	publicKey ed25519.PublicKey
+}
+
+// NewVerifier creates a verifier from a base64-encoded Ed25519 public key.
+func NewVerifier(encodedPublicKey string) (*Verifier, error) {
+	publicKey, err := parseVerifyKey(encodedPublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Verifier{publicKey: publicKey}, nil
+}
+
+// NewVerifierFromEnv creates a verifier using OL_LICENSE_VERIFY_KEY.
+func NewVerifierFromEnv(getenv func(string) string) (*Verifier, error) {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+
+	return NewVerifier(getenv(VerifyKeyEnv))
+}
+
+// VerifyHivebus verifies a license and returns its Hivebus product entitlement.
+func (v *Verifier) VerifyHivebus(rawKey string) (VerifiedLicense, error) {
+	return v.VerifyHivebusAt(rawKey, time.Now().UTC())
+}
+
+// VerifyHivebusAt verifies a license at a deterministic time for tests.
+func (v *Verifier) VerifyHivebusAt(rawKey string, now time.Time) (VerifiedLicense, error) {
+	if v == nil || len(v.publicKey) == 0 {
+		return VerifiedLicense{}, fmt.Errorf("license verifier is not configured")
+	}
+
+	encodedPayload, signature, err := splitLicenseKey(rawKey)
+	if err != nil {
+		return VerifiedLicense{}, err
+	}
+
+	// Billing signs the encoded payload string, not the decoded JSON bytes.
+	if !ed25519.Verify(v.publicKey, []byte(encodedPayload), signature) {
+		return VerifiedLicense{}, fmt.Errorf("license signature verification failed")
+	}
+
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(encodedPayload)
+	if err != nil {
+		return VerifiedLicense{}, fmt.Errorf("decode license payload: %w", err)
+	}
+
+	var payload Payload
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return VerifiedLicense{}, fmt.Errorf("parse license payload: %w", err)
+	}
+
+	entitlement, err := payload.hivebusEntitlement(now)
+	if err != nil {
+		return VerifiedLicense{}, err
+	}
+
+	return VerifiedLicense{Payload: payload, Entitlement: entitlement}, nil
+}
+
+func splitLicenseKey(rawKey string) (string, []byte, error) {
+	key := strings.TrimSpace(rawKey)
+	if !strings.HasPrefix(key, licensePrefix) {
+		return "", nil, fmt.Errorf("license key must use %s prefix", licensePrefix)
+	}
+
+	parts := strings.Split(strings.TrimPrefix(key, licensePrefix), ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", nil, fmt.Errorf("license key must contain payload and signature")
+	}
+
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", nil, fmt.Errorf("decode license signature: %w", err)
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return "", nil, fmt.Errorf("license signature must decode to %d bytes", ed25519.SignatureSize)
+	}
+
+	return parts[0], signature, nil
+}
+
+func (payload Payload) hivebusEntitlement(now time.Time) (ProductEntitlement, error) {
+	if payload.ExpiresAt <= 0 {
+		return ProductEntitlement{}, fmt.Errorf("license is missing expiry")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if now.Unix() >= payload.ExpiresAt {
+		return ProductEntitlement{}, fmt.Errorf("license is expired")
+	}
+
+	for _, entitlement := range payload.Products {
+		if strings.TrimSpace(entitlement.Product) != hivebusProduct {
+			continue
+		}
+		if err := validateTier(entitlement.Tier); err != nil {
+			return ProductEntitlement{}, err
+		}
+		return entitlement, nil
+	}
+
+	return ProductEntitlement{}, fmt.Errorf("license does not include %s entitlement", hivebusProduct)
+}
+
+func validateTier(tier model.Tier) error {
+	switch tier {
+	case model.TierFree, model.TierPro, model.TierTeams, model.TierEnterprise:
+		return nil
+	default:
+		return fmt.Errorf("license has unsupported hivebus tier %q", tier)
+	}
+}
+
+func parseVerifyKey(value string) (ed25519.PublicKey, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, fmt.Errorf("%s is required", VerifyKeyEnv)
+	}
+
+	for _, encoding := range []*base64.Encoding{
+		base64.RawURLEncoding,
+		base64.URLEncoding,
+		base64.RawStdEncoding,
+		base64.StdEncoding,
+	} {
+		publicKey, err := encoding.DecodeString(trimmed)
+		if err != nil {
+			continue
+		}
+		if len(publicKey) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("%s must decode to %d bytes", VerifyKeyEnv, ed25519.PublicKeySize)
+		}
+		return ed25519.PublicKey(publicKey), nil
+	}
+
+	return nil, fmt.Errorf("%s must be base64 encoded", VerifyKeyEnv)
+}
