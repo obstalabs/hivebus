@@ -24,6 +24,7 @@ type BillingContract struct {
 	VerifyKeyEnv           string   `json:"verify_key_env"`
 	ProductEntitlement     string   `json:"product_entitlement"`
 	EntitlementField       string   `json:"entitlement_field"`
+	ProductListField       string   `json:"product_list_field"`
 	CheckoutEndpoint       string   `json:"checkout_endpoint"`
 	LicenseEndpoint        string   `json:"license_endpoint"`
 	PortalEndpoint         string   `json:"portal_endpoint"`
@@ -49,7 +50,8 @@ func Boundary() EditionBoundary {
 			LicensePrefix:          licensing.LicensePrefix,
 			VerifyKeyEnv:           licensing.VerifyKeyEnv,
 			ProductEntitlement:     licensing.ProductName,
-			EntitlementField:       "products[]",
+			EntitlementField:       "entitlements[]",
+			ProductListField:       "products[]",
 			CheckoutEndpoint:       "/v1/billing/checkout",
 			LicenseEndpoint:        "/v1/billing/license",
 			PortalEndpoint:         "/v1/billing/portal",

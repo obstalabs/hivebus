@@ -30,7 +30,7 @@ Commercial editions use the shared Obstalabs billing contract:
 
 - the billing service issues unified `ol_` license keys, not product-prefixed `hb_` keys
 - commercial Hivebus surfaces verify licenses with `OL_LICENSE_VERIFY_KEY`
-- the signed payload contains `products[]`; Hivebus requires an entry with `p=hivebus` and reads its tier from `t`
+- the signed payload contains `products[]` plus `entitlements[]`; Hivebus requires an entitlement with `product=hivebus` and reads its tier from `tier`
 - checkout starts at `/v1/billing/checkout`, post-checkout license retrieval uses `/v1/billing/license`, and account management uses the billing portal
 - this open-source runtime keeps working without billing unless a commercial integration explicitly calls the license verifier
 

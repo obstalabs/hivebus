@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-20
+
+- Add worker leases, runtime auth, dispatch, context snapshots, and resume capsules for the v0 HTTP runtime.
+- Add artifact manifests, thread artifact storage, SSE thread watching, partial result streaming, and clarification request flow.
+- Define capability lifecycle, artifact trust, edge routing, authorization, clarification lifecycle, participant type, and channel access schemas.
+- Add nullbot intake, work-order bridge promotion, agent messaging queues, channel access control, and inferred worker capabilities.
+- Add unified Obstalabs `ol_` license verification for billing v2 entitlements and document the shared billing contract.
 - Clarify that deployment location is not the edition boundary: Free stays self-hostable, Pro is single-tenant on any deployment target, Teams adds shared coordination, and Enterprise adds corporate controls.
 
 ## [0.1.1] - 2026-04-15

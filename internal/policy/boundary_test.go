@@ -63,8 +63,11 @@ func TestBoundaryDocumentsSharedBillingContract(t *testing.T) {
 	if billing.ProductEntitlement != licensing.ProductName {
 		t.Fatalf("expected hivebus product entitlement, got %q", billing.ProductEntitlement)
 	}
-	if billing.EntitlementField != "products[]" {
-		t.Fatalf("expected products[] entitlement field, got %q", billing.EntitlementField)
+	if billing.EntitlementField != "entitlements[]" {
+		t.Fatalf("expected entitlements[] entitlement field, got %q", billing.EntitlementField)
+	}
+	if billing.ProductListField != "products[]" {
+		t.Fatalf("expected products[] product list field, got %q", billing.ProductListField)
 	}
 	if billing.CheckoutEndpoint != "/v1/billing/checkout" {
 		t.Fatalf("expected checkout endpoint, got %q", billing.CheckoutEndpoint)
