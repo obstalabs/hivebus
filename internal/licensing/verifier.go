@@ -21,20 +21,45 @@ const (
 
 	// ProductName is the product entitlement name Hivebus requires.
 	ProductName = "hivebus"
+
+	licensePayloadVersion = 2
+	licenseClockSkew      = 5 * time.Minute
+)
+
+// LicenseTier is the commercial tier string carried by billing v2 licenses.
+type LicenseTier string
+
+const (
+	LicenseTierFree       LicenseTier = "free"
+	LicenseTierTrial      LicenseTier = "trial"
+	LicenseTierPro        LicenseTier = "pro"
+	LicenseTierTeam       LicenseTier = "team"
+	LicenseTierTeams      LicenseTier = "teams"
+	LicenseTierEnterprise LicenseTier = "enterprise"
 )
 
 // ProductEntitlement is one product+tier grant in a unified Obstalabs license.
 type ProductEntitlement struct {
-	Product string     `json:"p"`
-	Tier    model.Tier `json:"t"`
+	Product string      `json:"product"`
+	Tier    LicenseTier `json:"tier"`
 }
 
-// Payload is the signed claim set embedded in a unified license key.
+// Payload is the signed claim set embedded in a unified billing v2 license key.
 type Payload struct {
-	Products  []ProductEntitlement `json:"products"`
-	Email     string               `json:"e,omitempty"`
-	ExpiresAt int64                `json:"x"`
-	SubID     string               `json:"s,omitempty"`
+	Version        int                  `json:"version"`
+	LicenseID      string               `json:"license_id"`
+	Subject        string               `json:"subject"`
+	Products       []string             `json:"products"`
+	Entitlements   []ProductEntitlement `json:"entitlements"`
+	Tier           string               `json:"tier,omitempty"`
+	Plan           string               `json:"plan,omitempty"`
+	Email          string               `json:"email,omitempty"`
+	SubscriptionID string               `json:"subscription_id,omitempty"`
+	IssuedAt       int64                `json:"issued_at"`
+	NotBefore      int64                `json:"not_before"`
+	ExpiresAt      int64                `json:"expires_at"`
+	Issuer         string               `json:"issuer"`
+	KeyID          string               `json:"key_id"`
 }
 
 // VerifiedLicense is the Hivebus entitlement extracted from a valid license.
@@ -112,7 +137,7 @@ func splitLicenseKey(rawKey string) (string, []byte, error) {
 		return "", nil, fmt.Errorf("license key must use %s prefix", LicensePrefix)
 	}
 
-	parts := strings.Split(strings.TrimPrefix(key, LicensePrefix), ".")
+	parts := strings.SplitN(strings.TrimPrefix(key, LicensePrefix), ".", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", nil, fmt.Errorf("license key must contain payload and signature")
 	}
@@ -129,17 +154,21 @@ func splitLicenseKey(rawKey string) (string, []byte, error) {
 }
 
 func (payload Payload) hivebusEntitlement(now time.Time) (ProductEntitlement, error) {
-	if payload.ExpiresAt <= 0 {
-		return ProductEntitlement{}, fmt.Errorf("license is missing expiry")
+	if err := payload.validateShape(); err != nil {
+		return ProductEntitlement{}, err
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	if now.Unix() >= payload.ExpiresAt {
+	now = now.UTC()
+	if now.Add(licenseClockSkew).Before(time.Unix(payload.NotBefore, 0).UTC()) {
+		return ProductEntitlement{}, fmt.Errorf("license is not valid yet")
+	}
+	if now.After(time.Unix(payload.ExpiresAt, 0).UTC().Add(licenseClockSkew)) {
 		return ProductEntitlement{}, fmt.Errorf("license is expired")
 	}
 
-	for _, entitlement := range payload.Products {
+	for _, entitlement := range payload.Entitlements {
 		if strings.TrimSpace(entitlement.Product) != ProductName {
 			continue
 		}
@@ -152,12 +181,44 @@ func (payload Payload) hivebusEntitlement(now time.Time) (ProductEntitlement, er
 	return ProductEntitlement{}, fmt.Errorf("license does not include %s entitlement", ProductName)
 }
 
-func validateTier(tier model.Tier) error {
+func (payload Payload) validateShape() error {
+	if payload.Version != licensePayloadVersion {
+		return fmt.Errorf("unsupported license payload version %d", payload.Version)
+	}
+	if payload.LicenseID == "" || payload.Subject == "" || payload.Issuer == "" || payload.KeyID == "" {
+		return fmt.Errorf("license payload missing required identity fields")
+	}
+	if payload.IssuedAt == 0 {
+		return fmt.Errorf("license payload missing issued_at")
+	}
+	if payload.NotBefore == 0 || payload.ExpiresAt == 0 || payload.ExpiresAt < payload.NotBefore {
+		return fmt.Errorf("license payload has invalid validity window")
+	}
+	return nil
+}
+
+func validateTier(tier LicenseTier) error {
 	switch tier {
-	case model.TierFree, model.TierPro, model.TierTeams, model.TierEnterprise:
+	case LicenseTierFree, LicenseTierTrial, LicenseTierPro, LicenseTierTeam, LicenseTierTeams, LicenseTierEnterprise:
 		return nil
 	default:
 		return fmt.Errorf("license has unsupported hivebus tier %q", tier)
+	}
+}
+
+// CustomerTier maps a billing license tier into the local policy tier space.
+func (entitlement ProductEntitlement) CustomerTier() (model.Tier, bool) {
+	switch entitlement.Tier {
+	case LicenseTierFree:
+		return model.TierFree, true
+	case LicenseTierTrial, LicenseTierPro:
+		return model.TierPro, true
+	case LicenseTierTeam, LicenseTierTeams:
+		return model.TierTeams, true
+	case LicenseTierEnterprise:
+		return model.TierEnterprise, true
+	default:
+		return "", false
 	}
 }
 
