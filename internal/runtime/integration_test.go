@@ -318,4 +318,29 @@ func TestPromoteThreadCreatesCanonicalWorkOrderAndOptionalSync(t *testing.T) {
 	if resp.Snapshot.Envelopes[1].Type != model.MessageTypeWorkOrderCreate {
 		t.Fatalf("expected second envelope work_order.create, got %s", resp.Snapshot.Envelopes[1].Type)
 	}
+
+	recoveryReq := httptest.NewRequest(http.MethodGet, "/v0/threads/"+thread.ThreadID+"/recovery", nil)
+	recoveryReq.Header.Set("Authorization", "Bearer operator-secret")
+	recoveryRec := httptest.NewRecorder()
+	handler.ServeHTTP(recoveryRec, recoveryReq)
+	if recoveryRec.Code != http.StatusOK {
+		t.Fatalf("GET /v0/threads/{id}/recovery status = %d, body = %s", recoveryRec.Code, recoveryRec.Body.String())
+	}
+
+	var capsule model.PromotedThreadRecoveryCapsule
+	if err := json.Unmarshal(recoveryRec.Body.Bytes(), &capsule); err != nil {
+		t.Fatalf("Unmarshal(recovery) error = %v", err)
+	}
+	if capsule.Type != model.RecoveryCapsuleTypePromotedThread {
+		t.Fatalf("expected promoted recovery capsule, got %q", capsule.Type)
+	}
+	if capsule.Promotion.WorkOrderID != 201 {
+		t.Fatalf("expected recovery capsule to reference WO-201, got %#v", capsule.Promotion)
+	}
+	if !capsule.VerifiedDiagnosis.Verified {
+		t.Fatalf("expected verified diagnosis in recovery capsule, got %#v", capsule.VerifiedDiagnosis)
+	}
+	if len(capsule.VerifiedFacts) == 0 {
+		t.Fatal("expected recovery capsule verified facts")
+	}
 }

@@ -121,6 +121,15 @@ Release builds can embed the same public verify key at build time:
 HIVEBUS_API_VERIFY_KEY=<base64-ed25519-public-key> make build
 ```
 
+Fetch the compact recovery handoff for a promoted thread:
+
+```bash
+curl -H "Authorization: Bearer <operator-token>" \
+  http://127.0.0.1:7081/v0/threads/<thread-id>/recovery
+```
+
+The recovery capsule contains verified diagnosis, evidence refs, stale/rejected fact labels, and the local promotion receipt. It deliberately excludes raw transcript, model narration, artifact bodies, and unlabeled stale hypotheses.
+
 ## Architecture
 
 ```text
@@ -140,6 +149,7 @@ investigator agents
 workledger bridge
   -> accepts only verified diagnoses
   -> creates the canonical work order that can fully resolve the user story
+  -> leaves a compact recovery capsule for post-compaction handoff
 
 optional hiveram.com execution integration
   -> mirrors or extends the same work order for commercial workflows when needed
@@ -148,11 +158,11 @@ optional hiveram.com execution integration
 Current code layout:
 
 - `cmd/hivebus`: minimal CLI entrypoint
-- `internal/model`: envelopes, threads, artifacts, diagnoses
+- `internal/model`: envelopes, threads, artifacts, diagnoses, recovery capsules
 - `internal/runtime`: v0 HTTP handlers for intake, promotion, dispatch, thread creation, append, and replay
 - `internal/policy`: free, pro, teams, enterprise limits
 - `internal/spec`: exported v0 contract and sample case bundle
-- `internal/store`: SQLite append-only event log and deterministic replay
+- `internal/store`: SQLite append-only event log, deterministic replay, and verified recovery projections
 - `internal/work`: deterministic workledger drafting rules with optional Hiveram execution targets
 
 ## Editions
@@ -169,6 +179,8 @@ This keeps the protocol shared while making the repo boundary explicit: free sta
 ## Canonical Workledger Contract
 
 `workledger` is the execution source of truth for Hivebus. A verified diagnosis is not enough on its own; it must be promotable into a canonical work order with an explicit target project.
+
+After promotion, `GET /v0/threads/{threadID}/recovery` exposes a verified-provenance capsule for compaction recovery and handoff. It is generated from local Hivebus events, so it does not require Hiveram, NeuroRouter, or a live Workledger call to read. External IDs are additive references, not hidden dependencies.
 
 The free/community contract includes these workledger operations:
 

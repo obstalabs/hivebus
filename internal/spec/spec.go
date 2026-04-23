@@ -24,6 +24,7 @@ type Document struct {
 	TrackingSystem         string                         `json:"tracking_system"`
 	OptionalBridge         string                         `json:"optional_bridge,omitempty"`
 	WorkOrderGate          map[string]bool                `json:"work_order_gate"`
+	RecoveryCapsule        RecoveryCapsuleContract        `json:"recovery_capsule"`
 }
 
 type CapabilityLifecycleContract struct {
@@ -71,6 +72,16 @@ type ClarificationLifecycleContract struct {
 	TerminalOutcomes []string            `json:"terminal_outcomes"`
 	BudgetFields     []string            `json:"budget_fields"`
 	Consumers        map[string][]string `json:"consumers"`
+}
+
+type RecoveryCapsuleContract struct {
+	Endpoint          string   `json:"endpoint"`
+	Type              string   `json:"type"`
+	RequiredFields    []string `json:"required_fields"`
+	FactStates        []string `json:"fact_states"`
+	ExcludedByDefault []string `json:"excluded_by_default"`
+	Authority         string   `json:"authority"`
+	OptionalRefs      []string `json:"optional_refs"`
 }
 
 // V0 returns the initial protocol contract for Hivebus.
@@ -407,6 +418,39 @@ func V0() Document {
 			"verified_diagnosis_required": true,
 			"missing_info_must_be_empty":  true,
 			"workledger_project_required": true,
+		},
+		RecoveryCapsule: RecoveryCapsuleContract{
+			Endpoint: "GET /v0/threads/{threadID}/recovery",
+			Type:     model.RecoveryCapsuleTypePromotedThread,
+			RequiredFields: []string{
+				"thread_id",
+				"verified_diagnosis",
+				"evidence",
+				"missing_info_resolution",
+				"promotion",
+				"next_recommended_handoff",
+			},
+			FactStates: []string{
+				string(model.RecoveryFactVerified),
+				string(model.RecoveryFactRejected),
+				string(model.RecoveryFactSuperseded),
+				string(model.RecoveryFactPromotedToWO),
+				string(model.RecoveryFactOperatorConfirmed),
+			},
+			ExcludedByDefault: []string{
+				"raw transcript",
+				"model narration",
+				"secret material",
+				"unlabeled stale hypotheses",
+				"artifact body",
+			},
+			Authority: "Hivebus owns verified issue provenance and promotion receipts; Workledger, Hiveram, and NeuroRouter references are optional additive ids, not required runtime dependencies.",
+			OptionalRefs: []string{
+				"workledger_project",
+				"work_order_id",
+				"hiveram_sync_target",
+				"neurorouter_session",
+			},
 		},
 	}
 }

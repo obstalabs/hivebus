@@ -62,6 +62,7 @@ func NewHandlerWithOptions(
 	mux.HandleFunc("GET /v0/artifacts/{sha256}", withAuth(keys, RoleWorker, srv.handleGetArtifact))
 	mux.HandleFunc("POST /v0/threads", withAuth(keys, RoleOperator, srv.handleCreateThread))
 	mux.HandleFunc("GET /v0/threads/{threadID}", withAuth(keys, RoleOperator, srv.handleGetThread))
+	mux.HandleFunc("GET /v0/threads/{threadID}/recovery", withAuth(keys, RoleOperator, srv.handleThreadRecovery))
 	mux.HandleFunc("POST /v0/threads/{threadID}/promote", withAuth(keys, RoleOperator, srv.handlePromoteThread))
 	mux.HandleFunc("POST /v0/threads/{threadID}/clarifications/response", withAuth(keys, RoleOperator, srv.handleClarificationResponse))
 	mux.HandleFunc("GET /v0/threads/{threadID}/watch", withAuth(keys, RoleWorker, srv.handleWatchThread))

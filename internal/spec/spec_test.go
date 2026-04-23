@@ -74,6 +74,30 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 		t.Fatal("expected workledger project gate")
 	}
 
+	if document.RecoveryCapsule.Endpoint != "GET /v0/threads/{threadID}/recovery" {
+		t.Fatalf("expected promoted thread recovery endpoint, got %q", document.RecoveryCapsule.Endpoint)
+	}
+
+	if document.RecoveryCapsule.Type != model.RecoveryCapsuleTypePromotedThread {
+		t.Fatalf("expected promoted thread recovery type, got %q", document.RecoveryCapsule.Type)
+	}
+
+	if len(document.RecoveryCapsule.RequiredFields) == 0 {
+		t.Fatal("expected recovery capsule required fields")
+	}
+
+	if len(document.RecoveryCapsule.FactStates) != 5 {
+		t.Fatalf("expected 5 recovery fact states, got %#v", document.RecoveryCapsule.FactStates)
+	}
+
+	if len(document.RecoveryCapsule.ExcludedByDefault) == 0 {
+		t.Fatal("expected recovery capsule exclusions")
+	}
+
+	if document.RecoveryCapsule.Authority == "" {
+		t.Fatal("expected recovery capsule authority boundary")
+	}
+
 	if len(document.Participants.Types) != 3 {
 		t.Fatalf("expected 3 participant types, got %d", len(document.Participants.Types))
 	}
