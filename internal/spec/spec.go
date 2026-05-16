@@ -16,6 +16,7 @@ type Document struct {
 	ClarificationLifecycle ClarificationLifecycleContract `json:"clarification_lifecycle"`
 	EdgeRouting            EdgeRoutingContract            `json:"edge_routing"`
 	CapabilityLifecycle    CapabilityLifecycleContract    `json:"capability_lifecycle"`
+	NeuroRouterRuns        NeuroRouterRunContract         `json:"neurorouter_runs"` // WO-47: governed NR run receipts
 	ThreadStatuses         []model.ThreadStatus           `json:"thread_statuses"`
 	ArtifactManifestFields []string                       `json:"artifact_manifest_fields"`
 	TierLimits             map[model.Tier]policy.Limits   `json:"tier_limits"`
@@ -84,6 +85,17 @@ type RecoveryCapsuleContract struct {
 	OptionalRefs      []string `json:"optional_refs"`
 }
 
+// NeuroRouterRunContract documents the typed receipt surface for governed NR runs. // WO-47
+type NeuroRouterRunContract struct {
+	MessageTypes     []model.MessageType `json:"message_types"`     // WO-47: supported nr.run.* envelope types
+	RequiredRefs     []string            `json:"required_refs"`     // WO-47: stable references that anchor receipts
+	OptionalRefs     []string            `json:"optional_refs"`     // WO-47: additive refs that never become copied truth
+	RedactionRules   []string            `json:"redaction_rules"`   // WO-47: customer-safe receipt constraints
+	NonOwnership     []string            `json:"non_ownership"`     // WO-47: systems Hivebus does not own
+	TerminalMessages []model.MessageType `json:"terminal_messages"` // WO-47: lifecycle end-state events
+	Consumers        map[string][]string `json:"consumers"`         // WO-47: expected readers of run receipts
+}
+
 // V0 returns the initial protocol contract for Hivebus.
 func V0() Document {
 	return Document{
@@ -113,6 +125,15 @@ func V0() Document {
 			model.MessageTypeDiagnosisPropose,
 			model.MessageTypeWorkOrderCreate,
 			model.MessageTypeTaskCancel,
+			model.MessageTypeNRRunStarted,
+			model.MessageTypeNRRunContextProjected,
+			model.MessageTypeNRRunApprovalPending,
+			model.MessageTypeNRRunToolCall,
+			model.MessageTypeNRRunPolicyDenied,
+			model.MessageTypeNRRunCompleted,
+			model.MessageTypeNRRunFailed,
+			model.MessageTypeNRRunCancelled,
+			model.MessageTypeNRRunAuditAnchor,
 		},
 		Participants: ParticipantContract{
 			Types: []string{
@@ -386,6 +407,57 @@ func V0() Document {
 				"policy": {
 					"reject unknown signer, expired artifact, class mismatch, or policy-denied install requests structurally",
 					"treat inline capability transport as exceptional and policy-gated",
+				},
+			},
+		},
+		NeuroRouterRuns: NeuroRouterRunContract{
+			MessageTypes: model.NRRunMessageTypes(),
+			RequiredRefs: []string{
+				"neurorouter_run_id",
+				"source_thread_id",
+				"occurred_at",
+				"redacted",
+			},
+			OptionalRefs: []string{
+				"workledger_wo_ref",
+				"agent_bundle_ref",
+				"agent_bundle_hash",
+				"context_bundle_ref",
+				"context_bundle_hash",
+				"tool_policy_ref",
+				"tool_policy_hash",
+				"audit_anchor_id",
+				"source_envelope_id",
+				"artifact_refs",
+			},
+			RedactionRules: []string{
+				"payloads are references-not-copies and reject unknown raw prompt, transcript, bundle body, or tool payload fields",
+				"redacted must be true before an nr.run.* envelope is accepted by model validation",
+				"redacted_output_summary is bounded and customer-safe; artifact bodies remain external",
+			},
+			NonOwnership: []string{
+				"Workledger remains canonical owner of WOs, bundles, policies, decisions, and execution records",
+				"NeuroRouter remains canonical owner of run audit and tool-governance details",
+				"Hivebus stores receipts and stable refs so the originating thread can show what happened next",
+			},
+			TerminalMessages: []model.MessageType{
+				model.MessageTypeNRRunCompleted,
+				model.MessageTypeNRRunFailed,
+				model.MessageTypeNRRunCancelled,
+				model.MessageTypeNRRunAuditAnchor,
+			},
+			Consumers: map[string][]string{
+				"hivebus": {
+					"append nr.run.* envelopes to the source thread as receipts without becoming an agent runtime",
+					"preserve run lifecycle continuity across intake, diagnosis, work-order handoff, and execution result",
+				},
+				"neurorouter": {
+					"emit run lifecycle receipts with stable bundle, policy, run, and audit refs",
+					"avoid copying prompts, transcripts, secrets, tool payloads, or canonical bundle bodies into Hivebus",
+				},
+				"hiveram": {
+					"show operator-safe run status and audit-anchor refs from the thread cockpit",
+					"treat Hivebus receipts as evidence, not canonical bundle or policy state",
 				},
 			},
 		},

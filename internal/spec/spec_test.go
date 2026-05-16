@@ -241,6 +241,34 @@ func TestV0DeclaresWorkledgerAsTrackingSystem(t *testing.T) {
 	if len(document.EdgeRouting.Consumers["hivebus"]) == 0 {
 		t.Fatal("expected hivebus edge routing consumer rules")
 	}
+
+	if len(document.NeuroRouterRuns.MessageTypes) != 9 {
+		t.Fatalf("expected 9 NeuroRouter run message types, got %d", len(document.NeuroRouterRuns.MessageTypes))
+	}
+
+	if len(document.NeuroRouterRuns.RequiredRefs) == 0 {
+		t.Fatal("expected NeuroRouter run required refs")
+	}
+
+	if len(document.NeuroRouterRuns.OptionalRefs) == 0 {
+		t.Fatal("expected NeuroRouter run optional refs")
+	}
+
+	if len(document.NeuroRouterRuns.RedactionRules) == 0 {
+		t.Fatal("expected NeuroRouter run redaction rules")
+	}
+
+	if len(document.NeuroRouterRuns.NonOwnership) == 0 {
+		t.Fatal("expected NeuroRouter run non-ownership rules")
+	}
+
+	if len(document.NeuroRouterRuns.TerminalMessages) != 4 {
+		t.Fatalf("expected 4 NeuroRouter terminal messages, got %d", len(document.NeuroRouterRuns.TerminalMessages))
+	}
+
+	if len(document.NeuroRouterRuns.Consumers["hivebus"]) == 0 {
+		t.Fatal("expected hivebus NeuroRouter run consumer rules")
+	}
 }
 
 func TestSampleCapabilityLifecycleValidatesAllEvents(t *testing.T) {
@@ -356,5 +384,20 @@ func TestSampleParticipantModelValidatesAllEvents(t *testing.T) {
 
 	if err := sample.Messages[2].ValidateTaskRequest(); err != nil {
 		t.Fatalf("ValidateTaskRequest(human-agent) error = %v", err)
+	}
+}
+
+func TestSampleNeuroRouterRunLifecycleValidatesAllEvents(t *testing.T) {
+	t.Helper()
+
+	sample := SampleNeuroRouterRunLifecycle()
+	if len(sample.Messages) != 9 {
+		t.Fatalf("expected 9 NeuroRouter run lifecycle messages, got %d", len(sample.Messages))
+	}
+
+	for _, envelope := range sample.Messages {
+		if err := envelope.ValidateNRRunLifecycle(); err != nil {
+			t.Fatalf("ValidateNRRunLifecycle(%s) error = %v", envelope.Type, err)
+		}
 	}
 }

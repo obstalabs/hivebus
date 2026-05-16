@@ -38,6 +38,15 @@ const (
 	MessageTypeDiagnosisPropose       MessageType = "diagnosis.proposed"
 	MessageTypeWorkOrderCreate        MessageType = "work_order.create"
 	MessageTypeTaskCancel             MessageType = "task.cancel"
+	MessageTypeNRRunStarted           MessageType = "nr.run.started"
+	MessageTypeNRRunContextProjected  MessageType = "nr.run.context_projected"
+	MessageTypeNRRunApprovalPending   MessageType = "nr.run.approval_pending"
+	MessageTypeNRRunToolCall          MessageType = "nr.run.tool_call"
+	MessageTypeNRRunPolicyDenied      MessageType = "nr.run.policy_denied"
+	MessageTypeNRRunCompleted         MessageType = "nr.run.completed"
+	MessageTypeNRRunFailed            MessageType = "nr.run.failed"
+	MessageTypeNRRunCancelled         MessageType = "nr.run.cancelled"
+	MessageTypeNRRunAuditAnchor       MessageType = "nr.run.audit_anchor"
 )
 
 var validMessageTypes = []MessageType{
@@ -65,6 +74,15 @@ var validMessageTypes = []MessageType{
 	MessageTypeDiagnosisPropose,
 	MessageTypeWorkOrderCreate,
 	MessageTypeTaskCancel,
+	MessageTypeNRRunStarted,
+	MessageTypeNRRunContextProjected,
+	MessageTypeNRRunApprovalPending,
+	MessageTypeNRRunToolCall,
+	MessageTypeNRRunPolicyDenied,
+	MessageTypeNRRunCompleted,
+	MessageTypeNRRunFailed,
+	MessageTypeNRRunCancelled,
+	MessageTypeNRRunAuditAnchor,
 }
 
 // Trace captures provenance for audit and replay.
@@ -115,6 +133,18 @@ type Artifact struct {
 
 // Validate applies structural checks that must hold before any routing.
 func (e Envelope) Validate() error {
+	if err := e.validateBase(); err != nil {
+		return err
+	}
+
+	if IsNRRunMessageType(e.Type) {
+		return e.validateNRRunLifecyclePayload()
+	}
+
+	return nil
+}
+
+func (e Envelope) validateBase() error {
 	switch {
 	case strings.TrimSpace(e.MessageID) == "":
 		return errors.New("message_id is required")

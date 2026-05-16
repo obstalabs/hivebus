@@ -43,6 +43,7 @@ Deployment location is not the tier split. Free/core stays self-hostable, Pro ca
 | Capability | Free | Pro | Teams | Enterprise | Repo |
 |------------|------|-----|-------|------------|------|
 | Typed JSON envelopes, threads, receipts, artifacts, and lifecycle state | yes | yes | yes | yes | `hivebus` |
+| NeuroRouter `nr.run.*` receipt envelope shapes for governed agent runs | yes | yes | yes | yes | `hivebus` |
 | Self-hosted bus core and deterministic validation/routing primitives | yes | yes | yes | yes | `hivebus` |
 | Nullbot intake core and clarification loop | yes | yes | yes | yes | `hivebus` |
 | Canonical `workledger` bridge: search, create, update, note, claim, release, context sync | yes | yes | yes | yes | `hivebus` |
@@ -95,6 +96,9 @@ Print a concrete nullbot-to-workledger example:
 ```bash
 ./bin/hivebus sample-case
 ```
+
+The `nr.run.*` receipt protocol is documented in
+[docs/protocols/nr-run-envelopes.md](docs/protocols/nr-run-envelopes.md).
 
 Show build metadata:
 

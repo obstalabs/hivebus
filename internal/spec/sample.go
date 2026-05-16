@@ -2,6 +2,7 @@ package spec
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/ppiankov/hivebus/internal/model"
@@ -22,6 +23,14 @@ type CapabilityLifecycleSample struct {
 	ArtifactID   string           `json:"artifact_id"`
 	CapabilityID string           `json:"capability_id"`
 	Messages     []model.Envelope `json:"messages"`
+}
+
+// NeuroRouterRunSample demonstrates nr.run.* receipts on a Hivebus thread. // WO-47
+type NeuroRouterRunSample struct {
+	Thread       model.Thread     `json:"thread"`         // WO-47: source thread that receives run receipts
+	WorkOrderRef string           `json:"work_order_ref"` // WO-47: canonical Workledger WO reference
+	RunID        string           `json:"run_id"`         // WO-47: canonical NeuroRouter run id
+	Messages     []model.Envelope `json:"messages"`       // WO-47: nine typed nr.run.* envelopes
 }
 
 type EdgeRoutingSample struct {
@@ -491,6 +500,170 @@ func SampleCapabilityLifecycle() CapabilityLifecycleSample {
 		WorkOrderID:  workOrderID,
 		ArtifactID:   artifactID,
 		CapabilityID: capabilityID,
+		Messages:     messages,
+	}
+}
+
+// SampleNeuroRouterRunLifecycle returns deterministic nr.run.* receipt envelopes. // WO-47
+func SampleNeuroRouterRunLifecycle() NeuroRouterRunSample {
+	baseTime := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	threadID := "thr_nr_governed_run"
+	runID := "nr_run_20260516_120000"
+	workOrderRef := "workledger://neurorouter-pro/WO-701"
+	agentBundleRef := "workledger://bundle/agent/preheat-investigator@sha256:aaaaaaaa"
+	contextBundleRef := "workledger://bundle/context/nr-governance@sha256:bbbbbbbb"
+	toolPolicyRef := "workledger://policy/tool/nr-governance@sha256:cccccccc"
+
+	thread := model.Thread{
+		ThreadID:     threadID,
+		Title:        "Governed NeuroRouter run emits thread receipts",
+		Status:       model.ThreadStatusInvestigating,
+		CustomerTier: model.TierFree,
+		Source:       "hivebus",
+		Summary:      "Demonstrates references-only NeuroRouter run receipts after a Workledger handoff.",
+		Participants: []model.Participant{
+			sampleServiceParticipant(
+				"service.neurorouter",
+				"NeuroRouter Teams",
+				model.ParticipantService,
+				"neurorouter",
+				model.ParticipantVisibilityInternal,
+				"nr.run.emit",
+			),
+			sampleServiceParticipant(
+				"service.hivebus",
+				"Hivebus Runtime",
+				model.ParticipantService,
+				"hivebus",
+				model.ParticipantVisibilityInternal,
+				"nr.run.receipt",
+			),
+			sampleServiceParticipant(
+				"service.workledger",
+				"Workledger",
+				model.ParticipantService,
+				"workledger",
+				model.ParticipantVisibilityInternal,
+				"work.truth",
+			),
+		},
+		CreatedAt: baseTime,
+		UpdatedAt: baseTime.Add(8 * time.Minute),
+	}
+
+	commonPayload := func(eventType model.MessageType, at time.Time) model.NRRunPayload {
+		payload := model.NRRunPayload{
+			WorkledgerWORef:  workOrderRef,
+			AgentBundleRef:   agentBundleRef,
+			ContextBundleRef: contextBundleRef,
+			ToolPolicyRef:    toolPolicyRef,
+			NeuroRouterRunID: runID,
+			SourceThreadID:   threadID,
+			SourceEnvelopeID: "msg_work_order_created",
+			Model:            "claude-sonnet",
+			Provider:         "anthropic",
+			OccurredAt:       at.Format(time.RFC3339),
+			Redacted:         true,
+		}
+
+		switch eventType {
+		case model.MessageTypeNRRunStarted:
+			payload.Policy = &model.NRRunPolicyResult{
+				Decision: model.NRRunPolicyAllowed,
+				RuleRef:  "policy://tool/nr-governance/start",
+			}
+		case model.MessageTypeNRRunContextProjected:
+			payload.RedactedOutput = "Context projection resolved approved Workledger, git, and Hivebus refs."
+		case model.MessageTypeNRRunApprovalPending:
+			payload.ApprovalID = "approval_nr_run_001"
+			payload.Policy = &model.NRRunPolicyResult{
+				Decision: model.NRRunPolicyApprovalRequired,
+				RuleRef:  "policy://tool/nr-governance/deploy",
+				Reason:   "operator approval required for deployment action",
+			}
+		case model.MessageTypeNRRunToolCall:
+			payload.ToolCallID = "tool_call_tests_001"
+			payload.ToolName = "go test"
+			payload.Policy = &model.NRRunPolicyResult{
+				Decision: model.NRRunPolicyAllowed,
+				RuleRef:  "policy://tool/nr-governance/test",
+			}
+		case model.MessageTypeNRRunPolicyDenied:
+			payload.ToolCallID = "tool_call_deploy_001"
+			payload.ToolName = "deploy"
+			payload.Policy = &model.NRRunPolicyResult{
+				Decision: model.NRRunPolicyDenied,
+				RuleRef:  "policy://tool/nr-governance/deploy",
+				Reason:   "deployment requires operator approval",
+			}
+		case model.MessageTypeNRRunCompleted:
+			payload.RedactedOutput = "Run completed with patch and verification refs attached."
+			payload.Cost = &model.NRRunCostSummary{
+				Currency:     "USD",
+				InputTokens:  12000,
+				OutputTokens: 1800,
+				Total:        0.42,
+			}
+			payload.ArtifactRefs = []model.NRRunArtifactRef{
+				{
+					Ref:      "artifact://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					Kind:     "patch",
+					SHA256:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					Redacted: true,
+				},
+			}
+		case model.MessageTypeNRRunFailed:
+			payload.FailureReason = "tool execution failed after bounded retry"
+		case model.MessageTypeNRRunCancelled:
+			payload.FailureReason = "operator cancelled pending run"
+		case model.MessageTypeNRRunAuditAnchor:
+			payload.AuditAnchorID = "audit_anchor_nr_run_001"
+		}
+
+		return payload
+	}
+
+	buildEnvelope := func(index int, eventType model.MessageType, at time.Time) model.Envelope {
+		payload, err := json.Marshal(commonPayload(eventType, at))
+		if err != nil {
+			panic(err)
+		}
+		messageID := "msg_nr_run_" + fmt.Sprintf("%03d", index)
+
+		return model.Envelope{
+			MessageID:      messageID,
+			ThreadID:       threadID,
+			From:           "service.neurorouter",
+			To:             []string{"service.hivebus"},
+			Type:           eventType,
+			Payload:        payload,
+			SentAt:         at,
+			IdempotencyKey: "idem_" + messageID,
+			Trace: model.Trace{
+				CorrelationID: "corr_" + threadID,
+				SpanID:        "span_" + messageID,
+				Model:         "neurorouter",
+				Verified:      true,
+			},
+			Security: model.Security{
+				Scheme:    "ed25519",
+				Nonce:     "nonce_" + messageID,
+				Signature: "sig_" + messageID,
+				Signed:    true,
+			},
+		}
+	}
+
+	messageTypes := model.NRRunMessageTypes()
+	messages := make([]model.Envelope, 0, len(messageTypes))
+	for i, messageType := range messageTypes {
+		messages = append(messages, buildEnvelope(i+1, messageType, baseTime.Add(time.Duration(i)*time.Minute)))
+	}
+
+	return NeuroRouterRunSample{
+		Thread:       thread,
+		WorkOrderRef: workOrderRef,
+		RunID:        runID,
 		Messages:     messages,
 	}
 }

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Typed NeuroRouter agent-run lifecycle envelopes (`nr.run.*`) — hivebus as receipts substrate for governed runs.
+
 ## [0.2.0] - 2026-04-20
 
 - Add worker leases, runtime auth, dispatch, context snapshots, and resume capsules for the v0 HTTP runtime.

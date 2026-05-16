@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/ppiankov/hivebus/internal/spec"
 )
 
 func TestStoreAppendAndReplayThread(t *testing.T) {
@@ -98,6 +99,37 @@ func TestStoreRejectsDuplicateMessageAndIdempotencyKey(t *testing.T) {
 	sameIdempotency := sampleEnvelope(thread.ThreadID, "msg_2", "idem_1")
 	if err := st.AppendEnvelope(t.Context(), sameIdempotency); !errors.Is(err, ErrDuplicateIdempotencyKey) {
 		t.Fatalf("AppendEnvelope(duplicate idempotency) error = %v, want %v", err, ErrDuplicateIdempotencyKey)
+	}
+}
+
+func TestStoreAppendsNeuroRouterRunReceipts(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	sample := spec.SampleNeuroRouterRunLifecycle()
+	if _, err := st.AppendThread(t.Context(), sample.Thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	for _, envelope := range sample.Messages {
+		if err := st.AppendEnvelope(t.Context(), envelope); err != nil {
+			t.Fatalf("AppendEnvelope(%s) error = %v", envelope.Type, err)
+		}
+	}
+
+	snapshot, err := st.LoadThread(t.Context(), sample.Thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+
+	if len(snapshot.Envelopes) != len(sample.Messages) {
+		t.Fatalf("expected %d envelopes, got %d", len(sample.Messages), len(snapshot.Envelopes))
+	}
+	if snapshot.Envelopes[0].Type != model.MessageTypeNRRunStarted {
+		t.Fatalf("expected first envelope %s, got %s", model.MessageTypeNRRunStarted, snapshot.Envelopes[0].Type)
+	}
+	if snapshot.Envelopes[len(snapshot.Envelopes)-1].Type != model.MessageTypeNRRunAuditAnchor {
+		t.Fatalf("expected final envelope %s, got %s", model.MessageTypeNRRunAuditAnchor, snapshot.Envelopes[len(snapshot.Envelopes)-1].Type)
 	}
 }
 
