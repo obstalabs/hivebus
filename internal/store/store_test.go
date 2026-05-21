@@ -102,6 +102,72 @@ func TestStoreRejectsDuplicateMessageAndIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsDirectVerifiedPromotionTruthAppend(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		status   model.PromotionStatus
+		typeName model.MessageType
+	}{
+		{
+			name:     "empty status diagnosis",
+			status:   "",
+			typeName: model.MessageTypeDiagnosisPropose,
+		},
+		{
+			name:     "passed status diagnosis",
+			status:   model.PromotionStatusPassed,
+			typeName: model.MessageTypeDiagnosisPropose,
+		},
+		{
+			name:     "passed status work order",
+			status:   model.PromotionStatusPassed,
+			typeName: model.MessageTypeWorkOrderCreate,
+		},
+	}
+
+	for i, tt := range tests {
+		envelope := sampleEnvelope(thread.ThreadID, "msg_promotion_"+tt.name, "idem_promotion_"+tt.name)
+		envelope.Type = tt.typeName
+		envelope.Trace.Verified = true
+		envelope.Trace.PromotionStatus = tt.status
+		if tt.typeName == model.MessageTypeDiagnosisPropose {
+			envelope.Payload = json.RawMessage(`{
+				"problem":"promotion append bypass",
+				"likely_cause":"store append should reject authoritative promotion truth",
+				"proposed_remediation":["use /promote instead of AppendEnvelope"],
+				"evidence_ids":["art_smoke_log"],
+				"confidence":"high",
+				"verified":true
+			}`)
+		} else {
+			envelope.Payload = json.RawMessage(`{
+				"tracking_system":"workledger",
+				"workledger_project":"hivebus",
+				"work_order_id":64,
+				"work_order_title":"Prevent append-path promotion truth",
+				"source_thread_id":"` + thread.ThreadID + `",
+				"optional_sync_targets":["hiveram.com"],
+				"confidence":"high",
+				"evidence_ids":["art_smoke_log"]
+			}`)
+		}
+		envelope.MessageID = envelope.MessageID + string(rune('a'+i))
+		envelope.IdempotencyKey = envelope.IdempotencyKey + string(rune('a'+i))
+
+		if err := st.AppendEnvelope(t.Context(), envelope); err == nil {
+			t.Fatalf("%s: expected AppendEnvelope() rejection", tt.name)
+		}
+	}
+}
+
 func TestStoreTracksPendingPromotionLaneSeparatelyFromVerifiedEnvelopes(t *testing.T) {
 	t.Helper()
 

@@ -119,6 +119,10 @@ func (s *Store) AppendEnvelope(ctx context.Context, envelope model.Envelope) err
 	if err := envelope.Validate(); err != nil {
 		return err
 	}
+	// WO-64: direct append must not mint legacy or promotion-passed recovery truth.
+	if err := ValidateThreadAppendEnvelope(envelope); err != nil {
+		return err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

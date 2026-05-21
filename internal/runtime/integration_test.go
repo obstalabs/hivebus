@@ -399,3 +399,88 @@ func TestAppendEnvelopeRejectsVerifiedPromotionEnvelopeWithoutPromotionStatus(t 
 		t.Fatalf("expected no appended promotion envelope after rejection, got %#v", snapshot.Envelopes)
 	}
 }
+
+func TestAppendEnvelopeRejectsVerifiedPromotionPassedEnvelope(t *testing.T) {
+	t.Helper()
+
+	tests := []struct {
+		name     string
+		envelope model.Envelope
+	}{
+		{
+			name: "diagnosis passed",
+			envelope: model.Envelope{
+				MessageID:      "msg_direct_append_diagnosis_passed",
+				From:           "agent.investigator",
+				To:             []string{"service.hivebus"},
+				Type:           model.MessageTypeDiagnosisPropose,
+				Payload:        json.RawMessage(`{"problem":"Smoke lane blocked.","likely_cause":"Append path tried to mint promotion-passed diagnosis truth.","proposed_remediation":["Use /promote instead."],"evidence_ids":["art_smoke_log"],"confidence":"high","verified":true}`),
+				IdempotencyKey: "idem_direct_append_diagnosis_passed",
+				Trace: model.Trace{
+					Verified:        true,
+					PromotionStatus: model.PromotionStatusPassed,
+				},
+				Security: model.Security{
+					Scheme: "ed25519",
+					Nonce:  "nonce_direct_append_diagnosis_passed",
+				},
+			},
+		},
+		{
+			name: "work order passed",
+			envelope: model.Envelope{
+				MessageID:      "msg_direct_append_work_order_passed",
+				From:           "service.hivebus",
+				To:             []string{"service.workledger"},
+				Type:           model.MessageTypeWorkOrderCreate,
+				Payload:        json.RawMessage(`{"tracking_system":"workledger","workledger_project":"hivebus","work_order_id":64,"work_order_title":"Prevent append-path promotion truth","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`),
+				IdempotencyKey: "idem_direct_append_work_order_passed",
+				Trace: model.Trace{
+					Verified:        true,
+					PromotionStatus: model.PromotionStatusPassed,
+				},
+				Security: model.Security{
+					Scheme: "ed25519",
+					Nonce:  "nonce_direct_append_work_order_passed",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := openTestStore(t)
+			keys := mustTestKeyStore(t)
+			handler := NewHandler(st, openTestArtifactStore(t), keys)
+
+			thread := sampleThread()
+			mustSeedThread(t, st, thread)
+
+			envelope := tt.envelope
+			envelope.ThreadID = thread.ThreadID
+			envelope.SentAt = thread.CreatedAt.Add(time.Minute)
+			envelope.Trace.CorrelationID = thread.ThreadID
+			if envelope.Type == model.MessageTypeWorkOrderCreate {
+				envelope.Payload = json.RawMessage(`{"tracking_system":"workledger","workledger_project":"hivebus","work_order_id":64,"work_order_title":"Prevent append-path promotion truth","source_thread_id":"` + thread.ThreadID + `","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`)
+			}
+
+			body := marshalJSON(t, envelope)
+			req := httptest.NewRequest(http.MethodPost, "/v0/threads/"+thread.ThreadID+"/messages", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer operator-secret")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("POST /v0/threads/{id}/messages status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+
+			snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+			if err != nil {
+				t.Fatalf("LoadThread() error = %v", err)
+			}
+			if len(snapshot.Envelopes) != 0 {
+				t.Fatalf("expected no appended promotion envelope after rejection, got %#v", snapshot.Envelopes)
+			}
+		})
+	}
+}

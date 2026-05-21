@@ -492,8 +492,65 @@ func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForFailedOrPending
 func appendTestEnvelope(t *testing.T, st *Store, envelope model.Envelope) {
 	t.Helper()
 
+	if envelope.Trace.Verified && isPromotionRecoveryEnvelopeType(envelope.Type) {
+		switch envelope.Trace.PromotionStatus {
+		case "":
+			appendLegacyPromotionEnvelopeForTest(t, st, envelope)
+			return
+		case model.PromotionStatusPassed:
+			appendAuthoritativePromotionEnvelopeForTest(t, st, envelope)
+			return
+		}
+	}
+
 	if err := st.AppendEnvelope(t.Context(), envelope); err != nil {
 		t.Fatalf("AppendEnvelope(%s) error = %v", envelope.MessageID, err)
+	}
+}
+
+func appendLegacyPromotionEnvelopeForTest(t *testing.T, st *Store, envelope model.Envelope) {
+	t.Helper()
+
+	tx, err := st.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx() error = %v", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := insertEnvelopeEventTx(t.Context(), tx, envelope); err != nil {
+		t.Fatalf("insertEnvelopeEventTx(%s) error = %v", envelope.MessageID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+}
+
+func appendAuthoritativePromotionEnvelopeForTest(t *testing.T, st *Store, envelope model.Envelope) {
+	t.Helper()
+
+	pendingEnvelope := envelope
+	pendingEnvelope.MessageID = "pending_" + envelope.MessageID
+	pendingEnvelope.IdempotencyKey = "pending_" + envelope.IdempotencyKey
+	pendingEnvelope.Trace.PromotionStatus = model.PromotionStatusPending
+
+	record := PromotionPendingRecord{
+		PendingMessageID: "pending_record_" + envelope.MessageID,
+		Envelope:         pendingEnvelope,
+		Status:           model.PromotionStatusPending,
+		UpdatedAt:        envelope.SentAt,
+	}
+	if err := st.RecordPromotionPending(t.Context(), record); err != nil {
+		t.Fatalf("RecordPromotionPending(%s) error = %v", envelope.MessageID, err)
+	}
+	if err := st.FinalizePromotion(
+		t.Context(),
+		record.PendingMessageID,
+		envelope.SentAt.Add(time.Nanosecond),
+		envelope,
+	); err != nil {
+		t.Fatalf("FinalizePromotion(%s) error = %v", envelope.MessageID, err)
 	}
 }
 

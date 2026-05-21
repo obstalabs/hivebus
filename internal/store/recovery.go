@@ -196,21 +196,6 @@ func hasAuthoritativePromotionPass(envelopes []model.Envelope) bool {
 	return false
 }
 
-func isAuthoritativePromotionEnvelope(envelope model.Envelope) bool {
-	if !isPromotionRecoveryEnvelope(envelope.Type) {
-		return false
-	}
-	if !envelope.Trace.Verified {
-		return false
-	}
-	return envelope.Trace.PromotionStatus == model.PromotionStatusPassed
-}
-
-func isPromotionRecoveryEnvelope(messageType model.MessageType) bool {
-	return messageType == model.MessageTypeDiagnosisPropose ||
-		messageType == model.MessageTypeWorkOrderCreate
-}
-
 func recoveryEvidenceRefs(
 	artifacts []model.Artifact,
 	evidenceIDs []string,
