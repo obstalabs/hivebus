@@ -347,6 +347,148 @@ func TestBuildPromotedThreadRecoveryCapsulePrefersExplicitPromotionStatusOverLeg
 	}
 }
 
+func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForUnverifiedExplicitStatus(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	thread.Status = model.ThreadStatusReadyForWork
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	legacyDiagnosis := diagnosisEnvelopeWithID(
+		t,
+		thread.ThreadID,
+		model.Diagnosis{
+			Problem:             "Legacy promoted diagnosis.",
+			LikelyCause:         "Unverified explicit status must not close the compatibility window.",
+			ProposedRemediation: []string{"Keep the legacy fallback until authoritative passed evidence exists."},
+			EvidenceIDs:         []string{"art_smoke_log"},
+			Confidence:          model.ConfidenceMedium,
+			Verified:            true,
+		},
+		"msg_diagnosis_legacy_unverified",
+		"idem_diagnosis_legacy_unverified",
+		thread.CreatedAt.Add(time.Minute),
+	)
+	legacyDiagnosis.Trace.PromotionStatus = ""
+	appendTestEnvelope(t, st, legacyDiagnosis)
+
+	legacyPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(2*time.Minute))
+	legacyPromotion.MessageID = "msg_work_order_legacy_unverified"
+	legacyPromotion.IdempotencyKey = "idem_work_order_legacy_unverified"
+	legacyPromotion.Trace.PromotionStatus = ""
+	appendTestEnvelope(t, st, legacyPromotion)
+
+	unverifiedPassedDiagnosis := diagnosisEnvelopeWithID(
+		t,
+		thread.ThreadID,
+		model.Diagnosis{
+			Problem:             "Unverified explicit status.",
+			LikelyCause:         "A general append path should not close legacy recovery.",
+			ProposedRemediation: []string{"Ignore unverified explicit status for legacy gating."},
+			EvidenceIDs:         []string{"art_smoke_log"},
+			Confidence:          model.ConfidenceLow,
+			Verified:            true,
+		},
+		"msg_diagnosis_unverified_passed",
+		"idem_diagnosis_unverified_passed",
+		thread.CreatedAt.Add(3*time.Minute),
+	)
+	unverifiedPassedDiagnosis.Trace.Verified = false
+	appendTestEnvelope(t, st, unverifiedPassedDiagnosis)
+
+	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+	capsule, err := BuildPromotedThreadRecoveryCapsule(snapshot, thread.CreatedAt.Add(4*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildPromotedThreadRecoveryCapsule() error = %v", err)
+	}
+	if capsule.VerifiedDiagnosis.SourceMessageID != legacyDiagnosis.MessageID {
+		t.Fatalf("expected legacy diagnosis to remain active, got %#v", capsule.VerifiedDiagnosis)
+	}
+	if capsule.Promotion.SourceMessageID != legacyPromotion.MessageID {
+		t.Fatalf("expected legacy promotion receipt to remain active, got %#v", capsule.Promotion)
+	}
+}
+
+func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForFailedOrPendingStatus(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	thread.Status = model.ThreadStatusReadyForWork
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	legacyDiagnosis := diagnosisEnvelopeWithID(
+		t,
+		thread.ThreadID,
+		model.Diagnosis{
+			Problem:             "Legacy promoted diagnosis.",
+			LikelyCause:         "Failed or pending explicit status must not close the compatibility window.",
+			ProposedRemediation: []string{"Keep the legacy fallback until a passed promotion exists."},
+			EvidenceIDs:         []string{"art_smoke_log"},
+			Confidence:          model.ConfidenceMedium,
+			Verified:            true,
+		},
+		"msg_diagnosis_legacy_failed",
+		"idem_diagnosis_legacy_failed",
+		thread.CreatedAt.Add(time.Minute),
+	)
+	legacyDiagnosis.Trace.PromotionStatus = ""
+	appendTestEnvelope(t, st, legacyDiagnosis)
+
+	legacyPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(2*time.Minute))
+	legacyPromotion.MessageID = "msg_work_order_legacy_failed"
+	legacyPromotion.IdempotencyKey = "idem_work_order_legacy_failed"
+	legacyPromotion.Trace.PromotionStatus = ""
+	appendTestEnvelope(t, st, legacyPromotion)
+
+	failedDiagnosis := diagnosisEnvelopeWithID(
+		t,
+		thread.ThreadID,
+		model.Diagnosis{
+			Problem:             "Failed explicit status.",
+			LikelyCause:         "Promotion failed after emitting a diagnostic envelope.",
+			ProposedRemediation: []string{"Do not let failed status disable legacy recovery."},
+			EvidenceIDs:         []string{"art_smoke_log"},
+			Confidence:          model.ConfidenceLow,
+			Verified:            true,
+		},
+		"msg_diagnosis_failed_explicit",
+		"idem_diagnosis_failed_explicit",
+		thread.CreatedAt.Add(3*time.Minute),
+	)
+	failedDiagnosis.Trace.PromotionStatus = model.PromotionStatusFailed
+	appendTestEnvelope(t, st, failedDiagnosis)
+
+	pendingPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(4*time.Minute))
+	pendingPromotion.MessageID = "msg_work_order_pending_explicit"
+	pendingPromotion.IdempotencyKey = "idem_work_order_pending_explicit"
+	pendingPromotion.Trace.PromotionStatus = model.PromotionStatusPending
+	appendTestEnvelope(t, st, pendingPromotion)
+
+	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+	capsule, err := BuildPromotedThreadRecoveryCapsule(snapshot, thread.CreatedAt.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildPromotedThreadRecoveryCapsule() error = %v", err)
+	}
+	if capsule.VerifiedDiagnosis.SourceMessageID != legacyDiagnosis.MessageID {
+		t.Fatalf("expected legacy diagnosis to remain active, got %#v", capsule.VerifiedDiagnosis)
+	}
+	if capsule.Promotion.SourceMessageID != legacyPromotion.MessageID {
+		t.Fatalf("expected legacy promotion receipt to remain active, got %#v", capsule.Promotion)
+	}
+}
+
 func appendTestEnvelope(t *testing.T, st *Store, envelope model.Envelope) {
 	t.Helper()
 

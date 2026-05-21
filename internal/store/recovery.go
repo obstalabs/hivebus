@@ -97,7 +97,7 @@ func latestVerifiedDiagnosis(envelopes []model.Envelope) (model.Envelope, model.
 	var selectedEnvelope model.Envelope
 	var selected model.Diagnosis
 	found := false
-	legacyAllowed := !hasExplicitPromotionStatus(envelopes)
+	legacyAllowed := !hasAuthoritativePromotionPass(envelopes)
 
 	for _, envelope := range envelopes {
 		if envelope.Type != model.MessageTypeDiagnosisPropose ||
@@ -136,7 +136,7 @@ func latestPromotionReceipt(
 	var selectedEnvelope model.Envelope
 	var selected promotedWorkOrderPayload
 	found := false
-	legacyAllowed := !hasExplicitPromotionStatus(envelopes)
+	legacyAllowed := !hasAuthoritativePromotionPass(envelopes)
 
 	for _, envelope := range envelopes {
 		if envelope.Type != model.MessageTypeWorkOrderCreate ||
@@ -172,8 +172,8 @@ func latestPromotionReceipt(
 }
 
 // WO-61: legacy fallback is bounded to all-legacy promoted threads only; once
-// a thread has any explicit promotion status, empty-status promotion envelopes
-// no longer qualify for recovery.
+// a thread has authoritative verified promotion-passed evidence, empty-status
+// promotion envelopes no longer qualify for recovery.
 func promotionPassedForRecovery(envelope model.Envelope, legacyAllowed bool) bool {
 	switch envelope.Trace.PromotionStatus {
 	case model.PromotionStatusPassed:
@@ -185,17 +185,25 @@ func promotionPassedForRecovery(envelope model.Envelope, legacyAllowed bool) boo
 	}
 }
 
-func hasExplicitPromotionStatus(envelopes []model.Envelope) bool {
+func hasAuthoritativePromotionPass(envelopes []model.Envelope) bool {
 	for _, envelope := range envelopes {
-		if !isPromotionRecoveryEnvelope(envelope.Type) {
+		if !isAuthoritativePromotionEnvelope(envelope) {
 			continue
 		}
-		if envelope.Trace.PromotionStatus != "" {
-			return true
-		}
+		return true
 	}
 
 	return false
+}
+
+func isAuthoritativePromotionEnvelope(envelope model.Envelope) bool {
+	if !isPromotionRecoveryEnvelope(envelope.Type) {
+		return false
+	}
+	if !envelope.Trace.Verified {
+		return false
+	}
+	return envelope.Trace.PromotionStatus == model.PromotionStatusPassed
 }
 
 func isPromotionRecoveryEnvelope(messageType model.MessageType) bool {

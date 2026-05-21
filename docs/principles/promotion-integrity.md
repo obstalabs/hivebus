@@ -7,8 +7,9 @@ WO-54 draws a hard line between promotion attempts and promotion truth.
 - Recovery may only project envelopes that either:
   - carry `trace.promotion_status=passed`, or
   - predate the field entirely and therefore have an empty status during the
-    WO-61 compatibility window, but only when the thread contains no explicit
-    promotion-status envelopes yet.
+    WO-61 compatibility window, but only when the thread contains no
+    authoritative verified promotion-passed envelopes yet. Pending, failed, or
+    unverified promotion envelopes do not close that compatibility window.
 - `FinalizePromotion` is the only path that can move promotion envelopes into
   the verified lane, and every finalized envelope must carry
   `trace.promotion_status=passed`.
