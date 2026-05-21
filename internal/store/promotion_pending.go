@@ -74,22 +74,19 @@ func (s *Store) RecordPromotionPending(ctx context.Context, record PromotionPend
 		return err
 	}
 
-	payload, err := json.Marshal(record)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("marshal pending promotion: %w", err)
+		return fmt.Errorf("begin pending promotion transaction: %w", err)
 	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
-	_, err = s.db.ExecContext(
-		ctx,
-		`INSERT INTO thread_events (thread_id, event_kind, event_at, payload_json)
-		 VALUES (?, ?, ?, ?)`,
-		record.Envelope.ThreadID,
-		eventKindPromotionPending,
-		formatTime(record.UpdatedAt),
-		payload,
-	)
-	if err != nil {
-		return fmt.Errorf("insert pending promotion event: %w", err)
+	if err := insertPromotionPendingEventTx(ctx, tx, record.Envelope.ThreadID, record); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit pending promotion transaction: %w", err)
 	}
 
 	return nil
