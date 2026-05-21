@@ -11,7 +11,11 @@ WO-54 draws a hard line between promotion attempts and promotion truth.
     authoritative verified promotion-passed envelopes yet. Pending, failed, or
     unverified promotion envelopes do not close that compatibility window.
 - `FinalizePromotion` is the only path that can move promotion envelopes into
-  the verified lane, and every finalized envelope must carry
+  the verified lane, and every finalization must commit the complete
+  authoritative pair for one thread:
+  - one verified `diagnosis.proposed` envelope, and
+  - one verified `work_order.create` envelope.
+  Every finalized envelope must carry `trace.verified=true` and
   `trace.promotion_status=passed`.
 - Operators cannot append fresh verified `diagnosis.proposed` or
   `work_order.create` envelopes with empty or `passed`

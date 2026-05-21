@@ -78,8 +78,9 @@ func TestBuildPromotedThreadRecoveryCapsuleUsesVerifiedProvenanceOnly(t *testing
 		Confidence:          model.ConfidenceHigh,
 		Verified:            true,
 	}
-	appendTestEnvelope(t, st, diagnosisEnvelope(t, thread.ThreadID, diagnosis, thread.CreatedAt.Add(4*time.Minute)))
-	appendTestEnvelope(t, st, workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(5*time.Minute)))
+	verifiedDiagnosis := diagnosisEnvelope(t, thread.ThreadID, diagnosis, thread.CreatedAt.Add(4*time.Minute))
+	verifiedPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(5*time.Minute))
+	appendAuthoritativePromotionPairForTest(t, st, verifiedDiagnosis, verifiedPromotion)
 
 	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
 	if err != nil {
@@ -311,7 +312,6 @@ func TestBuildPromotedThreadRecoveryCapsulePrefersExplicitPromotionStatusOverLeg
 		"idem_diagnosis_passed",
 		thread.CreatedAt.Add(3*time.Minute),
 	)
-	appendTestEnvelope(t, st, explicitDiagnosis)
 
 	explicitPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(4*time.Minute))
 	explicitPromotion.MessageID = "msg_work_order_passed"
@@ -323,10 +323,10 @@ func TestBuildPromotedThreadRecoveryCapsulePrefersExplicitPromotionStatusOverLeg
 		"work_order_title":"Explicit promotion wins",
 		"source_thread_id":"` + thread.ThreadID + `",
 		"optional_sync_targets":["hiveram.com"],
-		"confidence":"high",
-		"evidence_ids":["art_smoke_log"]
-	}`)
-	appendTestEnvelope(t, st, explicitPromotion)
+			"confidence":"high",
+			"evidence_ids":["art_smoke_log"]
+		}`)
+	appendAuthoritativePromotionPairForTest(t, st, explicitDiagnosis, explicitPromotion)
 
 	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
 	if err != nil {
@@ -498,7 +498,7 @@ func appendTestEnvelope(t *testing.T, st *Store, envelope model.Envelope) {
 			appendLegacyPromotionEnvelopeForTest(t, st, envelope)
 			return
 		case model.PromotionStatusPassed:
-			appendAuthoritativePromotionEnvelopeForTest(t, st, envelope)
+			appendPassedPromotionEnvelopeForTest(t, st, envelope)
 			return
 		}
 	}
@@ -527,30 +527,60 @@ func appendLegacyPromotionEnvelopeForTest(t *testing.T, st *Store, envelope mode
 	}
 }
 
-func appendAuthoritativePromotionEnvelopeForTest(t *testing.T, st *Store, envelope model.Envelope) {
+func appendPassedPromotionEnvelopeForTest(t *testing.T, st *Store, envelope model.Envelope) {
 	t.Helper()
 
-	pendingEnvelope := envelope
-	pendingEnvelope.MessageID = "pending_" + envelope.MessageID
-	pendingEnvelope.IdempotencyKey = "pending_" + envelope.IdempotencyKey
+	tx, err := st.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx() error = %v", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := insertEnvelopeEventTx(t.Context(), tx, envelope); err != nil {
+		t.Fatalf("insertEnvelopeEventTx(%s) error = %v", envelope.MessageID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+}
+
+func appendAuthoritativePromotionPairForTest(
+	t *testing.T,
+	st *Store,
+	diagnosis model.Envelope,
+	workOrder model.Envelope,
+) {
+	t.Helper()
+
+	pendingEnvelope := diagnosis
+	pendingEnvelope.MessageID = "pending_" + diagnosis.MessageID
+	pendingEnvelope.IdempotencyKey = "pending_" + diagnosis.IdempotencyKey
 	pendingEnvelope.Trace.PromotionStatus = model.PromotionStatusPending
 
 	record := PromotionPendingRecord{
-		PendingMessageID: "pending_record_" + envelope.MessageID,
+		PendingMessageID: "pending_record_" + diagnosis.MessageID,
 		Envelope:         pendingEnvelope,
 		Status:           model.PromotionStatusPending,
-		UpdatedAt:        envelope.SentAt,
+		UpdatedAt:        diagnosis.SentAt,
 	}
 	if err := st.RecordPromotionPending(t.Context(), record); err != nil {
-		t.Fatalf("RecordPromotionPending(%s) error = %v", envelope.MessageID, err)
+		t.Fatalf("RecordPromotionPending(%s) error = %v", diagnosis.MessageID, err)
 	}
 	if err := st.FinalizePromotion(
 		t.Context(),
 		record.PendingMessageID,
-		envelope.SentAt.Add(time.Nanosecond),
-		envelope,
+		workOrder.SentAt.Add(time.Nanosecond),
+		diagnosis,
+		workOrder,
 	); err != nil {
-		t.Fatalf("FinalizePromotion(%s) error = %v", envelope.MessageID, err)
+		t.Fatalf(
+			"FinalizePromotion(%s,%s) error = %v",
+			diagnosis.MessageID,
+			workOrder.MessageID,
+			err,
+		)
 	}
 }
 

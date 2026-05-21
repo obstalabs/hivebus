@@ -101,9 +101,6 @@ func (s *Store) FinalizePromotion(
 	if strings.TrimSpace(pendingMessageID) == "" {
 		return errors.New("pending_message_id is required")
 	}
-	if len(envelopes) == 0 {
-		return errors.New("at least one verified promotion envelope is required")
-	}
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
@@ -111,19 +108,9 @@ func (s *Store) FinalizePromotion(
 		ctx = context.Background()
 	}
 
-	threadID := strings.TrimSpace(envelopes[0].ThreadID)
-	if threadID == "" {
-		return errors.New("verified promotion envelope thread_id is required")
-	}
-	for _, envelope := range envelopes {
-		if envelope.Trace.PromotionStatus != model.PromotionStatusPassed {
-			return errors.New("verified promotion envelopes must carry trace.promotion_status=passed")
-		}
-	}
-	for _, envelope := range envelopes[1:] {
-		if envelope.ThreadID != threadID {
-			return errors.New("verified promotion envelopes must share a thread_id")
-		}
+	threadID, err := validateFinalizePromotionEnvelopes(envelopes)
+	if err != nil {
+		return err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -168,6 +155,53 @@ func (s *Store) FinalizePromotion(
 	}
 
 	return nil
+}
+
+// WO-65: pending promotion only resolves once the complete authoritative pair
+// is present, so recovery never inherits a half-promoted thread.
+func validateFinalizePromotionEnvelopes(envelopes []model.Envelope) (string, error) {
+	if len(envelopes) != 2 {
+		return "", errors.New("verified promotion finalization requires exactly one diagnosis.proposed envelope and one work_order.create envelope")
+	}
+
+	threadID := strings.TrimSpace(envelopes[0].ThreadID)
+	if threadID == "" {
+		return "", errors.New("verified promotion envelope thread_id is required")
+	}
+
+	hasDiagnosis := false
+	hasWorkOrder := false
+	for _, envelope := range envelopes {
+		if envelope.ThreadID != threadID {
+			return "", errors.New("verified promotion envelopes must share a thread_id")
+		}
+		if !envelope.Trace.Verified {
+			return "", errors.New("verified promotion envelopes must carry trace.verified=true")
+		}
+		if envelope.Trace.PromotionStatus != model.PromotionStatusPassed {
+			return "", errors.New("verified promotion envelopes must carry trace.promotion_status=passed")
+		}
+
+		switch envelope.Type {
+		case model.MessageTypeDiagnosisPropose:
+			if hasDiagnosis {
+				return "", errors.New("verified promotion finalization accepts only one diagnosis.proposed envelope")
+			}
+			hasDiagnosis = true
+		case model.MessageTypeWorkOrderCreate:
+			if hasWorkOrder {
+				return "", errors.New("verified promotion finalization accepts only one work_order.create envelope")
+			}
+			hasWorkOrder = true
+		default:
+			return "", errors.New("verified promotion finalization only accepts diagnosis.proposed and work_order.create envelopes")
+		}
+	}
+	if !hasDiagnosis || !hasWorkOrder {
+		return "", errors.New("verified promotion finalization requires both diagnosis.proposed and work_order.create envelopes")
+	}
+
+	return threadID, nil
 }
 
 func insertPromotionPendingEventTx(
