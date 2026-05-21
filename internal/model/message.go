@@ -87,11 +87,22 @@ var validMessageTypes = []MessageType{
 
 // Trace captures provenance for audit and replay.
 type Trace struct {
-	CorrelationID string `json:"correlation_id"`
-	SpanID        string `json:"span_id,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Verified      bool   `json:"verified"`
+	CorrelationID   string          `json:"correlation_id"`
+	SpanID          string          `json:"span_id,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	Verified        bool            `json:"verified"`
+	PromotionStatus PromotionStatus `json:"promotion_status,omitempty"` // WO-54: recovery trusts only promotion-passed envelopes
 }
+
+// PromotionStatus labels whether a promotion-related envelope is still pending,
+// failed before promotion completed, or passed the full gate.
+type PromotionStatus string
+
+const (
+	PromotionStatusPending PromotionStatus = "pending"
+	PromotionStatusPassed  PromotionStatus = "passed"
+	PromotionStatusFailed  PromotionStatus = "failed"
+)
 
 // Security describes the transport-level security posture of an envelope.
 type Security struct {
@@ -162,6 +173,11 @@ func (e Envelope) validateBase() error {
 		return errors.New("idempotency_key is required")
 	case strings.TrimSpace(e.Trace.CorrelationID) == "":
 		return errors.New("trace.correlation_id is required")
+	case e.Trace.PromotionStatus != "" &&
+		e.Trace.PromotionStatus != PromotionStatusPending &&
+		e.Trace.PromotionStatus != PromotionStatusPassed &&
+		e.Trace.PromotionStatus != PromotionStatusFailed:
+		return fmt.Errorf("unsupported trace.promotion_status %q", e.Trace.PromotionStatus)
 	case strings.TrimSpace(e.Security.Scheme) == "":
 		return errors.New("security.scheme is required")
 	case strings.TrimSpace(e.Security.Nonce) == "":

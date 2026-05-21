@@ -83,13 +83,18 @@ func (s *server) handlePromoteThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := appendEnvelopeIfMissing(r.Context(), s.store, diagnosisEnvelope); err != nil {
+	pendingRecord := buildPendingPromotionRecord(diagnosisEnvelope, now)
+	if err := s.store.RecordPromotionPending(r.Context(), pendingRecord); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	draft, err := work.DraftFromThread(request.WorkledgerProject, snapshot.Thread, request.Diagnosis)
 	if err != nil {
+		if recordErr := recordFailedPendingPromotion(r.Context(), s.store, pendingRecord, err, currentTime()); recordErr != nil {
+			writeError(w, http.StatusInternalServerError, recordErr)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -99,16 +104,34 @@ func (s *server) handlePromoteThread(w http.ResponseWriter, r *http.Request) {
 
 	canonical, err := s.workOrders.CreateWorkOrder(r.Context(), draft)
 	if err != nil {
+		if recordErr := recordFailedPendingPromotion(r.Context(), s.store, pendingRecord, err, currentTime()); recordErr != nil {
+			writeError(w, http.StatusInternalServerError, recordErr)
+			return
+		}
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 
 	workOrderEnvelope, err := buildWorkOrderEnvelope(threadID, request, draft, canonical, now.Add(1*time.Second))
 	if err != nil {
+		if recordErr := recordFailedPendingPromotion(r.Context(), s.store, pendingRecord, err, currentTime()); recordErr != nil {
+			writeError(w, http.StatusInternalServerError, recordErr)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := appendEnvelopeIfMissing(r.Context(), s.store, workOrderEnvelope); err != nil {
+	if err := s.store.FinalizePromotion(
+		r.Context(),
+		pendingRecord.PendingMessageID,
+		now.Add(2*time.Second),
+		diagnosisEnvelope,
+		workOrderEnvelope,
+	); err != nil {
+		if recordErr := recordFailedPendingPromotion(r.Context(), s.store, pendingRecord, err, currentTime()); recordErr != nil {
+			writeError(w, http.StatusInternalServerError, recordErr)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -176,10 +199,11 @@ func buildDiagnosisEnvelope(
 		SentAt:         at,
 		IdempotencyKey: "idem_diagnosis_" + digest,
 		Trace: model.Trace{
-			CorrelationID: threadID,
-			SpanID:        "promote.diagnosis",
-			Model:         "hivebus",
-			Verified:      true,
+			CorrelationID:   threadID,
+			SpanID:          "promote.diagnosis",
+			Model:           "hivebus",
+			Verified:        true,
+			PromotionStatus: model.PromotionStatusPassed, // WO-54: recovery trusts only promotion-passed diagnosis envelopes
 		},
 		Security: model.Security{
 			Scheme:    "ed25519",
@@ -222,10 +246,11 @@ func buildWorkOrderEnvelope(
 		SentAt:         at,
 		IdempotencyKey: "idem_work_order_" + digest,
 		Trace: model.Trace{
-			CorrelationID: threadID,
-			SpanID:        "promote.work_order",
-			Model:         "hivebus",
-			Verified:      true,
+			CorrelationID:   threadID,
+			SpanID:          "promote.work_order",
+			Model:           "hivebus",
+			Verified:        true,
+			PromotionStatus: model.PromotionStatusPassed, // WO-54: work-order receipts only enter verified recovery state after promotion passes
 		},
 		Security: model.Security{
 			Scheme:    "ed25519",
@@ -236,8 +261,34 @@ func buildWorkOrderEnvelope(
 	}, nil
 }
 
-func appendEnvelopeIfMissing(ctx context.Context, st *store.Store, envelope model.Envelope) error {
-	err := st.AppendEnvelope(ctx, envelope)
+func buildPendingPromotionRecord(
+	envelope model.Envelope,
+	at time.Time,
+) store.PromotionPendingRecord {
+	pendingEnvelope := envelope
+	pendingEnvelope.Trace.PromotionStatus = model.PromotionStatusPending
+
+	return store.PromotionPendingRecord{
+		PendingMessageID: "pending_" + envelope.MessageID,
+		Envelope:         pendingEnvelope,
+		Status:           model.PromotionStatusPending,
+		UpdatedAt:        at,
+	}
+}
+
+func recordFailedPendingPromotion(
+	ctx context.Context,
+	st *store.Store,
+	record store.PromotionPendingRecord,
+	failure error,
+	at time.Time,
+) error {
+	record.Envelope.Trace.PromotionStatus = model.PromotionStatusFailed
+	record.Status = model.PromotionStatusFailed
+	record.FailureReason = failure.Error()
+	record.UpdatedAt = at
+
+	err := st.RecordPromotionPending(ctx, record)
 	if errors.Is(err, store.ErrDuplicateMessage) || errors.Is(err, store.ErrDuplicateIdempotencyKey) {
 		return nil
 	}

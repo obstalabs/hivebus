@@ -171,6 +171,97 @@ func TestBuildPromotedThreadRecoveryCapsuleRequiresPromotionAndResolvedDiagnosis
 	}
 }
 
+func TestBuildPromotedThreadRecoveryCapsuleIgnoresPendingPromotionLane(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	thread.Status = model.ThreadStatusReadyForWork
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	diagnosis := model.Diagnosis{
+		Problem:             "Smoke lane blocked.",
+		LikelyCause:         "Pending promotion should not count as verified recovery state.",
+		ProposedRemediation: []string{"Finish the promotion or leave it diagnostic only."},
+		EvidenceIDs:         []string{"art_smoke_log"},
+		Confidence:          model.ConfidenceHigh,
+		Verified:            true,
+	}
+	pending := diagnosisEnvelopeWithID(
+		t,
+		thread.ThreadID,
+		diagnosis,
+		"msg_diagnosis_pending",
+		"idem_diagnosis_pending",
+		thread.CreatedAt.Add(time.Minute),
+	)
+	pending.Trace.PromotionStatus = model.PromotionStatusFailed
+	if err := st.RecordPromotionPending(t.Context(), PromotionPendingRecord{
+		PendingMessageID: "pending_msg_diagnosis_pending",
+		Envelope:         pending,
+		Status:           model.PromotionStatusFailed,
+		FailureReason:    "missing_info still unresolved",
+		UpdatedAt:        thread.CreatedAt.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("RecordPromotionPending() error = %v", err)
+	}
+
+	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+	if len(snapshot.PendingPromotions) != 1 {
+		t.Fatalf("expected one pending promotion record, got %#v", snapshot.PendingPromotions)
+	}
+	if _, err := BuildPromotedThreadRecoveryCapsule(snapshot, thread.CreatedAt); err == nil {
+		t.Fatal("expected pending-only promotion lane to be ignored by recovery")
+	}
+}
+
+func TestBuildPromotedThreadRecoveryCapsuleAcceptsLegacyPromotedEnvelopes(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	thread.Status = model.ThreadStatusReadyForWork
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	diagnosis := model.Diagnosis{
+		Problem:             "Smoke lane blocked.",
+		LikelyCause:         "Legacy promoted envelopes predate promotion_status.",
+		ProposedRemediation: []string{"Keep legacy recovery alive until WO-61 migration lands."},
+		EvidenceIDs:         []string{"art_smoke_log"},
+		Confidence:          model.ConfidenceHigh,
+		Verified:            true,
+	}
+	legacyDiagnosis := diagnosisEnvelope(t, thread.ThreadID, diagnosis, thread.CreatedAt.Add(time.Minute))
+	legacyDiagnosis.Trace.PromotionStatus = ""
+	appendTestEnvelope(t, st, legacyDiagnosis)
+
+	legacyPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(2*time.Minute))
+	legacyPromotion.Trace.PromotionStatus = ""
+	appendTestEnvelope(t, st, legacyPromotion)
+
+	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+	capsule, err := BuildPromotedThreadRecoveryCapsule(snapshot, thread.CreatedAt.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildPromotedThreadRecoveryCapsule() error = %v", err)
+	}
+	if capsule.VerifiedDiagnosis.SourceMessageID != legacyDiagnosis.MessageID {
+		t.Fatalf("expected legacy diagnosis to remain recoverable, got %#v", capsule.VerifiedDiagnosis)
+	}
+	if capsule.Promotion.SourceMessageID != legacyPromotion.MessageID {
+		t.Fatalf("expected legacy promotion receipt to remain recoverable, got %#v", capsule.Promotion)
+	}
+}
+
 func appendTestEnvelope(t *testing.T, st *Store, envelope model.Envelope) {
 	t.Helper()
 
@@ -211,8 +302,9 @@ func diagnosisEnvelopeWithID(
 		SentAt:         at,
 		IdempotencyKey: idempotencyKey,
 		Trace: model.Trace{
-			CorrelationID: threadID,
-			Verified:      true,
+			CorrelationID:   threadID,
+			Verified:        true,
+			PromotionStatus: model.PromotionStatusPassed,
 		},
 		Security: model.Security{
 			Scheme: "ed25519",
@@ -241,8 +333,9 @@ func workOrderEnvelope(threadID string, at time.Time) model.Envelope {
 		SentAt:         at,
 		IdempotencyKey: "idem_work_order",
 		Trace: model.Trace{
-			CorrelationID: threadID,
-			Verified:      true,
+			CorrelationID:   threadID,
+			Verified:        true,
+			PromotionStatus: model.PromotionStatusPassed,
 		},
 		Security: model.Security{
 			Scheme: "ed25519",

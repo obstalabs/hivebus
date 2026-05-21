@@ -102,6 +102,116 @@ func TestStoreRejectsDuplicateMessageAndIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestStoreTracksPendingPromotionLaneSeparatelyFromVerifiedEnvelopes(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	pendingEnvelope := sampleEnvelope(thread.ThreadID, "msg_diag", "idem_diag")
+	pendingEnvelope.Type = model.MessageTypeDiagnosisPropose
+	pendingEnvelope.Trace.Verified = true
+	pendingEnvelope.Trace.PromotionStatus = model.PromotionStatusPending
+	record := PromotionPendingRecord{
+		PendingMessageID: "pending_msg_diag",
+		Envelope:         pendingEnvelope,
+		Status:           model.PromotionStatusPending,
+		UpdatedAt:        pendingEnvelope.SentAt,
+	}
+	if err := st.RecordPromotionPending(t.Context(), record); err != nil {
+		t.Fatalf("RecordPromotionPending() error = %v", err)
+	}
+
+	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+	if len(snapshot.Envelopes) != 0 {
+		t.Fatalf("expected pending promotion to stay out of verified envelopes, got %#v", snapshot.Envelopes)
+	}
+	if len(snapshot.PendingPromotions) != 1 {
+		t.Fatalf("expected one pending promotion record, got %#v", snapshot.PendingPromotions)
+	}
+
+	verifiedEnvelope := pendingEnvelope
+	verifiedEnvelope.MessageID = "msg_diag_verified"
+	verifiedEnvelope.IdempotencyKey = "idem_diag_verified"
+	verifiedEnvelope.Trace.PromotionStatus = model.PromotionStatusPassed
+	if err := st.FinalizePromotion(
+		t.Context(),
+		record.PendingMessageID,
+		pendingEnvelope.SentAt.Add(time.Minute),
+		verifiedEnvelope,
+	); err != nil {
+		t.Fatalf("FinalizePromotion() error = %v", err)
+	}
+
+	snapshot, err = st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() after finalize error = %v", err)
+	}
+	if len(snapshot.PendingPromotions) != 0 {
+		t.Fatalf("expected no active pending promotions after finalize, got %#v", snapshot.PendingPromotions)
+	}
+	if len(snapshot.Envelopes) != 1 {
+		t.Fatalf("expected one verified promotion envelope, got %#v", snapshot.Envelopes)
+	}
+	if snapshot.Envelopes[0].Trace.PromotionStatus != model.PromotionStatusPassed {
+		t.Fatalf("expected finalized promotion status passed, got %#v", snapshot.Envelopes[0].Trace)
+	}
+}
+
+func TestFinalizePromotionRejectsNonPassedEnvelope(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	pendingEnvelope := sampleEnvelope(thread.ThreadID, "msg_diag", "idem_diag")
+	pendingEnvelope.Type = model.MessageTypeDiagnosisPropose
+	pendingEnvelope.Trace.Verified = true
+	pendingEnvelope.Trace.PromotionStatus = model.PromotionStatusPending
+	record := PromotionPendingRecord{
+		PendingMessageID: "pending_msg_diag",
+		Envelope:         pendingEnvelope,
+		Status:           model.PromotionStatusPending,
+		UpdatedAt:        pendingEnvelope.SentAt,
+	}
+	if err := st.RecordPromotionPending(t.Context(), record); err != nil {
+		t.Fatalf("RecordPromotionPending() error = %v", err)
+	}
+
+	verifiedEnvelope := pendingEnvelope
+	verifiedEnvelope.MessageID = "msg_diag_verified"
+	verifiedEnvelope.IdempotencyKey = "idem_diag_verified"
+	verifiedEnvelope.Trace.PromotionStatus = ""
+	if err := st.FinalizePromotion(
+		t.Context(),
+		record.PendingMessageID,
+		pendingEnvelope.SentAt.Add(time.Minute),
+		verifiedEnvelope,
+	); err == nil {
+		t.Fatal("expected FinalizePromotion() to reject envelopes without passed promotion status")
+	}
+
+	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+	if len(snapshot.PendingPromotions) != 1 {
+		t.Fatalf("expected pending promotion lane to remain active after rejected finalize, got %#v", snapshot.PendingPromotions)
+	}
+	if len(snapshot.Envelopes) != 0 {
+		t.Fatalf("expected no verified envelopes after rejected finalize, got %#v", snapshot.Envelopes)
+	}
+}
+
 func TestStoreAppendsNeuroRouterRunReceipts(t *testing.T) {
 	t.Helper()
 

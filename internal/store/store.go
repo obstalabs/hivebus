@@ -34,9 +34,10 @@ type Store struct {
 }
 
 type ThreadSnapshot struct {
-	Thread        model.Thread     `json:"thread"`
-	Envelopes     []model.Envelope `json:"envelopes"`
-	LeaseReceipts []LeaseReceipt   `json:"lease_receipts,omitempty"`
+	Thread            model.Thread             `json:"thread"`
+	Envelopes         []model.Envelope         `json:"envelopes"`
+	PendingPromotions []PromotionPendingRecord `json:"pending_promotions,omitempty"` // WO-54: diagnostic promotion lane kept out of verified recovery state
+	LeaseReceipts     []LeaseReceipt           `json:"lease_receipts,omitempty"`
 }
 
 func Open(path string) (*Store, error) {
@@ -196,6 +197,8 @@ func loadThreadSnapshotRows(
 	threadID string,
 ) (ThreadSnapshot, error) {
 	var snapshot ThreadSnapshot
+	pendingByID := make(map[string]PromotionPendingRecord)
+	pendingOrder := make([]string, 0)
 	foundThread := false
 	for rows.Next() {
 		var eventKind string
@@ -243,6 +246,30 @@ func loadThreadSnapshotRows(
 				return ThreadSnapshot{}, errors.New("envelope thread_id does not match replay target")
 			}
 			snapshot.Envelopes = append(snapshot.Envelopes, envelope)
+		case eventKindPromotionPending:
+			var record PromotionPendingRecord
+			if err := json.Unmarshal(payload, &record); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("unmarshal pending promotion event: %w", err)
+			}
+			if err := record.Validate(); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("invalid pending promotion event: %w", err)
+			}
+			if record.Envelope.ThreadID != threadID {
+				return ThreadSnapshot{}, errors.New("pending promotion thread_id does not match replay target")
+			}
+			if _, exists := pendingByID[record.PendingMessageID]; !exists {
+				pendingOrder = append(pendingOrder, record.PendingMessageID)
+			}
+			pendingByID[record.PendingMessageID] = record
+		case eventKindPromotionPendingResolved:
+			var resolution promotionPendingResolution
+			if err := json.Unmarshal(payload, &resolution); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("unmarshal pending promotion resolution event: %w", err)
+			}
+			if err := resolution.Validate(); err != nil {
+				return ThreadSnapshot{}, fmt.Errorf("invalid pending promotion resolution event: %w", err)
+			}
+			delete(pendingByID, resolution.PendingMessageID)
 		case eventKindWorkerLease:
 			var receipt LeaseReceipt
 			if err := json.Unmarshal(payload, &receipt); err != nil {
@@ -277,6 +304,13 @@ func loadThreadSnapshotRows(
 
 	if !foundThread {
 		return ThreadSnapshot{}, ErrThreadNotFound
+	}
+	for _, pendingMessageID := range pendingOrder {
+		record, exists := pendingByID[pendingMessageID]
+		if !exists {
+			continue
+		}
+		snapshot.PendingPromotions = append(snapshot.PendingPromotions, record)
 	}
 
 	return snapshot, nil

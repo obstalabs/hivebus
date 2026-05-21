@@ -99,7 +99,9 @@ func latestVerifiedDiagnosis(envelopes []model.Envelope) (model.Envelope, model.
 	found := false
 
 	for _, envelope := range envelopes {
-		if envelope.Type != model.MessageTypeDiagnosisPropose || !envelope.Trace.Verified {
+		if envelope.Type != model.MessageTypeDiagnosisPropose ||
+			!envelope.Trace.Verified ||
+			!promotionPassedForRecovery(envelope) {
 			continue
 		}
 
@@ -135,7 +137,9 @@ func latestPromotionReceipt(
 	found := false
 
 	for _, envelope := range envelopes {
-		if envelope.Type != model.MessageTypeWorkOrderCreate || !envelope.Trace.Verified {
+		if envelope.Type != model.MessageTypeWorkOrderCreate ||
+			!envelope.Trace.Verified ||
+			!promotionPassedForRecovery(envelope) {
 			continue
 		}
 
@@ -163,6 +167,18 @@ func latestPromotionReceipt(
 	}
 
 	return selectedEnvelope, selected, nil
+}
+
+// WO-54: recovery accepts legacy promoted envelopes with no promotion_status
+// until backward-compatible migration lands, but pending or failed promotion
+// records must never satisfy recovery.
+func promotionPassedForRecovery(envelope model.Envelope) bool {
+	switch envelope.Trace.PromotionStatus {
+	case "", model.PromotionStatusPassed:
+		return true
+	default:
+		return false
+	}
 }
 
 func recoveryEvidenceRefs(
