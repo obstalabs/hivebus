@@ -137,6 +137,10 @@ func (s *server) handleAppendEnvelope(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("thread_id does not match request path"))
 		return
 	}
+	if err := validateOperatorAppendedPromotionEnvelope(envelope); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 
 	err := s.store.AppendEnvelope(r.Context(), envelope)
 	switch {
@@ -155,6 +159,25 @@ func (s *server) handleAppendEnvelope(w http.ResponseWriter, r *http.Request) {
 			MessageID: envelope.MessageID,
 		})
 	}
+}
+
+func validateOperatorAppendedPromotionEnvelope(envelope model.Envelope) error {
+	if !envelope.Trace.Verified {
+		return nil
+	}
+	if !isPromotedRecoveryMessageType(envelope.Type) {
+		return nil
+	}
+	if envelope.Trace.PromotionStatus != "" {
+		return nil
+	}
+
+	return errors.New("verified promotion envelopes appended via /messages must include trace.promotion_status")
+}
+
+func isPromotedRecoveryMessageType(messageType model.MessageType) bool {
+	return messageType == model.MessageTypeDiagnosisPropose ||
+		messageType == model.MessageTypeWorkOrderCreate
 }
 
 func decodeJSON(body io.ReadCloser, target any) error {

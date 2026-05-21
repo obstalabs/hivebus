@@ -7,10 +7,15 @@ WO-54 draws a hard line between promotion attempts and promotion truth.
 - Recovery may only project envelopes that either:
   - carry `trace.promotion_status=passed`, or
   - predate the field entirely and therefore have an empty status during the
-    WO-61 compatibility window.
+    WO-61 compatibility window, but only when the thread contains no explicit
+    promotion-status envelopes yet.
 - `FinalizePromotion` is the only path that can move promotion envelopes into
   the verified lane, and every finalized envelope must carry
   `trace.promotion_status=passed`.
+- Operators cannot append fresh verified `diagnosis.proposed` or
+  `work_order.create` envelopes with an empty `trace.promotion_status` through
+  `/v0/threads/{threadID}/messages`; empty status is reserved for bounded
+  legacy recovery only.
 
 This keeps the thread useful after a failed promotion without letting a failed
 attempt masquerade as a verified diagnosis or a canonical Workledger handoff.

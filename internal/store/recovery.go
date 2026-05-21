@@ -97,11 +97,12 @@ func latestVerifiedDiagnosis(envelopes []model.Envelope) (model.Envelope, model.
 	var selectedEnvelope model.Envelope
 	var selected model.Diagnosis
 	found := false
+	legacyAllowed := !hasExplicitPromotionStatus(envelopes)
 
 	for _, envelope := range envelopes {
 		if envelope.Type != model.MessageTypeDiagnosisPropose ||
 			!envelope.Trace.Verified ||
-			!promotionPassedForRecovery(envelope) {
+			!promotionPassedForRecovery(envelope, legacyAllowed) {
 			continue
 		}
 
@@ -135,11 +136,12 @@ func latestPromotionReceipt(
 	var selectedEnvelope model.Envelope
 	var selected promotedWorkOrderPayload
 	found := false
+	legacyAllowed := !hasExplicitPromotionStatus(envelopes)
 
 	for _, envelope := range envelopes {
 		if envelope.Type != model.MessageTypeWorkOrderCreate ||
 			!envelope.Trace.Verified ||
-			!promotionPassedForRecovery(envelope) {
+			!promotionPassedForRecovery(envelope, legacyAllowed) {
 			continue
 		}
 
@@ -169,16 +171,36 @@ func latestPromotionReceipt(
 	return selectedEnvelope, selected, nil
 }
 
-// WO-54: recovery accepts legacy promoted envelopes with no promotion_status
-// until backward-compatible migration lands, but pending or failed promotion
-// records must never satisfy recovery.
-func promotionPassedForRecovery(envelope model.Envelope) bool {
+// WO-61: legacy fallback is bounded to all-legacy promoted threads only; once
+// a thread has any explicit promotion status, empty-status promotion envelopes
+// no longer qualify for recovery.
+func promotionPassedForRecovery(envelope model.Envelope, legacyAllowed bool) bool {
 	switch envelope.Trace.PromotionStatus {
-	case "", model.PromotionStatusPassed:
+	case model.PromotionStatusPassed:
 		return true
+	case "":
+		return legacyAllowed
 	default:
 		return false
 	}
+}
+
+func hasExplicitPromotionStatus(envelopes []model.Envelope) bool {
+	for _, envelope := range envelopes {
+		if !isPromotionRecoveryEnvelope(envelope.Type) {
+			continue
+		}
+		if envelope.Trace.PromotionStatus != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isPromotionRecoveryEnvelope(messageType model.MessageType) bool {
+	return messageType == model.MessageTypeDiagnosisPropose ||
+		messageType == model.MessageTypeWorkOrderCreate
 }
 
 func recoveryEvidenceRefs(

@@ -262,6 +262,91 @@ func TestBuildPromotedThreadRecoveryCapsuleAcceptsLegacyPromotedEnvelopes(t *tes
 	}
 }
 
+func TestBuildPromotedThreadRecoveryCapsulePrefersExplicitPromotionStatusOverLegacyFallback(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	thread.Status = model.ThreadStatusReadyForWork
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	legacyDiagnosis := diagnosisEnvelopeWithID(
+		t,
+		thread.ThreadID,
+		model.Diagnosis{
+			Problem:             "Legacy promoted diagnosis.",
+			LikelyCause:         "This should be ignored once explicit promotion status exists.",
+			ProposedRemediation: []string{"Prefer the explicit passed promotion state."},
+			EvidenceIDs:         []string{"art_smoke_log"},
+			Confidence:          model.ConfidenceMedium,
+			Verified:            true,
+		},
+		"msg_diagnosis_legacy",
+		"idem_diagnosis_legacy",
+		thread.CreatedAt.Add(time.Minute),
+	)
+	legacyDiagnosis.Trace.PromotionStatus = ""
+	appendTestEnvelope(t, st, legacyDiagnosis)
+
+	legacyPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(2*time.Minute))
+	legacyPromotion.MessageID = "msg_work_order_legacy"
+	legacyPromotion.IdempotencyKey = "idem_work_order_legacy"
+	legacyPromotion.Trace.PromotionStatus = ""
+	appendTestEnvelope(t, st, legacyPromotion)
+
+	explicitDiagnosis := diagnosisEnvelopeWithID(
+		t,
+		thread.ThreadID,
+		model.Diagnosis{
+			Problem:             "Explicit promoted diagnosis.",
+			LikelyCause:         "Promotion passed with explicit status.",
+			ProposedRemediation: []string{"Use this diagnosis instead of the legacy one."},
+			EvidenceIDs:         []string{"art_smoke_log"},
+			Confidence:          model.ConfidenceHigh,
+			Verified:            true,
+		},
+		"msg_diagnosis_passed",
+		"idem_diagnosis_passed",
+		thread.CreatedAt.Add(3*time.Minute),
+	)
+	appendTestEnvelope(t, st, explicitDiagnosis)
+
+	explicitPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(4*time.Minute))
+	explicitPromotion.MessageID = "msg_work_order_passed"
+	explicitPromotion.IdempotencyKey = "idem_work_order_passed"
+	explicitPromotion.Payload = json.RawMessage(`{
+		"tracking_system":"workledger",
+		"workledger_project":"hivebus",
+		"work_order_id":61,
+		"work_order_title":"Explicit promotion wins",
+		"source_thread_id":"` + thread.ThreadID + `",
+		"optional_sync_targets":["hiveram.com"],
+		"confidence":"high",
+		"evidence_ids":["art_smoke_log"]
+	}`)
+	appendTestEnvelope(t, st, explicitPromotion)
+
+	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+	capsule, err := BuildPromotedThreadRecoveryCapsule(snapshot, thread.CreatedAt.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildPromotedThreadRecoveryCapsule() error = %v", err)
+	}
+	if capsule.VerifiedDiagnosis.SourceMessageID != explicitDiagnosis.MessageID {
+		t.Fatalf("expected explicit diagnosis to win over legacy fallback, got %#v", capsule.VerifiedDiagnosis)
+	}
+	if capsule.Promotion.SourceMessageID != explicitPromotion.MessageID {
+		t.Fatalf("expected explicit promotion receipt to win over legacy fallback, got %#v", capsule.Promotion)
+	}
+	if capsule.Promotion.WorkOrderID != 61 {
+		t.Fatalf("expected explicit work order id 61, got %#v", capsule.Promotion)
+	}
+}
+
 func appendTestEnvelope(t *testing.T, st *Store, envelope model.Envelope) {
 	t.Helper()
 

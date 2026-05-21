@@ -344,3 +344,58 @@ func TestPromoteThreadCreatesCanonicalWorkOrderAndOptionalSync(t *testing.T) {
 		t.Fatal("expected recovery capsule verified facts")
 	}
 }
+
+func TestAppendEnvelopeRejectsVerifiedPromotionEnvelopeWithoutPromotionStatus(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
+
+	thread := sampleThread()
+	mustSeedThread(t, st, thread)
+
+	diagnosis := model.Diagnosis{
+		Problem:             "Smoke lane blocked.",
+		LikelyCause:         "Direct append should not mint fresh legacy promotion truth.",
+		ProposedRemediation: []string{"Require explicit promotion status or use /promote."},
+		EvidenceIDs:         []string{"art_smoke_log"},
+		Confidence:          model.ConfidenceHigh,
+		Verified:            true,
+	}
+	body := marshalJSON(t, model.Envelope{
+		MessageID:      "msg_direct_append_diagnosis",
+		ThreadID:       thread.ThreadID,
+		From:           "agent.investigator",
+		To:             []string{"service.hivebus"},
+		Type:           model.MessageTypeDiagnosisPropose,
+		Payload:        marshalJSON(t, diagnosis),
+		SentAt:         thread.CreatedAt.Add(time.Minute),
+		IdempotencyKey: "idem_direct_append_diagnosis",
+		Trace: model.Trace{
+			CorrelationID: thread.ThreadID,
+			Verified:      true,
+		},
+		Security: model.Security{
+			Scheme: "ed25519",
+			Nonce:  "nonce_direct_append_diagnosis",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v0/threads/"+thread.ThreadID+"/messages", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer operator-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /v0/threads/{id}/messages status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+	if len(snapshot.Envelopes) != 0 {
+		t.Fatalf("expected no appended promotion envelope after rejection, got %#v", snapshot.Envelopes)
+	}
+}
