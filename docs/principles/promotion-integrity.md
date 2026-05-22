@@ -30,6 +30,10 @@ WO-54 draws a hard line between promotion attempts and promotion truth.
   canonical Workledger receipt already in the verified lane before it writes a
   new pending record or calls Workledger again, so a lost client response cannot
   create a second work order or a spurious `promotion.failed` diagnostic.
+  The receipt must bind to the retried diagnosis by message ID, diagnosis
+  payload hash, evidence IDs, confidence, optional sync targets, title,
+  thread, and Workledger project; a nearby receipt from the same thread is not
+  enough.
 - Operators cannot append fresh verified `diagnosis.proposed` or
   `work_order.create` envelopes with empty or `passed`
   `trace.promotion_status` through `/v0/threads/{threadID}/messages`; empty

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -163,16 +164,24 @@ func (s *server) handlePromoteThread(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// promotedRetryReceipt mirrors the receipt fields needed for WO-72 exact
+// retry binding without widening the public promotion response schema.
 type promotedRetryReceipt struct {
-	TrackingSystem    string `json:"tracking_system"`
-	WorkledgerProject string `json:"workledger_project"`
-	WorkOrderID       int    `json:"work_order_id"`
-	WorkOrderTitle    string `json:"work_order_title"`
-	SourceThreadID    string `json:"source_thread_id"`
+	TrackingSystem         string           `json:"tracking_system"`
+	WorkledgerProject      string           `json:"workledger_project"`
+	WorkOrderID            int              `json:"work_order_id"`
+	WorkOrderTitle         string           `json:"work_order_title"`
+	SourceThreadID         string           `json:"source_thread_id"`
+	OptionalSyncTargets    []string         `json:"optional_sync_targets"`
+	Confidence             model.Confidence `json:"confidence"`
+	EvidenceIDs            []string         `json:"evidence_ids"`
+	DiagnosisMessageID     string           `json:"diagnosis_message_id"`
+	DiagnosisPayloadSHA256 string           `json:"diagnosis_payload_sha256"`
 }
 
-// WO-62: a lost-response retry must reconcile to already-finalized local truth
-// before Hivebus creates a second Workledger side effect or failed pending lane.
+// WO-62/WO-72: a lost-response retry must reconcile to already-finalized
+// local truth for the exact finalized diagnosis/receipt pair before Hivebus
+// creates a second Workledger side effect or failed pending lane.
 func existingPromotedRetry(
 	snapshot store.ThreadSnapshot,
 	diagnosisEnvelope model.Envelope,
@@ -187,7 +196,7 @@ func existingPromotedRetry(
 				hasDiagnosis = true
 			}
 		case model.MessageTypeWorkOrderCreate:
-			if ref, ok := promotedWorkOrderMatchesRetry(envelope, draft); ok {
+			if ref, ok := promotedWorkOrderMatchesRetry(envelope, diagnosisEnvelope, draft); ok {
 				canonical = ref
 			}
 		}
@@ -208,7 +217,11 @@ func promotedDiagnosisMatchesRetry(envelope model.Envelope, expected model.Envel
 		string(envelope.Payload) == string(expected.Payload)
 }
 
-func promotedWorkOrderMatchesRetry(envelope model.Envelope, draft work.Draft) (WorkOrderRef, bool) {
+func promotedWorkOrderMatchesRetry(
+	envelope model.Envelope,
+	diagnosisEnvelope model.Envelope,
+	draft work.Draft,
+) (WorkOrderRef, bool) {
 	if envelope.Type != model.MessageTypeWorkOrderCreate ||
 		!envelope.Trace.Verified ||
 		envelope.Trace.PromotionStatus != model.PromotionStatusPassed {
@@ -228,7 +241,16 @@ func promotedWorkOrderMatchesRetry(envelope model.Envelope, draft work.Draft) (W
 	if receipt.SourceThreadID != draft.SourceThreadID {
 		return WorkOrderRef{}, false
 	}
-	if receipt.WorkOrderID <= 0 || strings.TrimSpace(receipt.WorkOrderTitle) == "" {
+	if receipt.WorkOrderID <= 0 || strings.TrimSpace(receipt.WorkOrderTitle) != strings.TrimSpace(draft.Title) {
+		return WorkOrderRef{}, false
+	}
+	if receipt.Confidence != draft.Confidence ||
+		!slices.Equal(receipt.EvidenceIDs, draft.EvidenceIDs) ||
+		!slices.Equal(receipt.OptionalSyncTargets, draft.OptionalSyncTargets) {
+		return WorkOrderRef{}, false
+	}
+	if receipt.DiagnosisMessageID != diagnosisEnvelope.MessageID ||
+		receipt.DiagnosisPayloadSHA256 != promotionPayloadSHA256(diagnosisEnvelope.Payload) {
 		return WorkOrderRef{}, false
 	}
 
@@ -275,7 +297,7 @@ func buildDiagnosisEnvelope(
 		return model.Envelope{}, fmt.Errorf("marshal diagnosis payload: %w", err)
 	}
 
-	digest := stableDigest(threadID, request.WorkledgerProject, request.Diagnosis.Problem)
+	digest := promotionDiagnosisDigest(threadID, request)
 	return model.Envelope{
 		MessageID:      "msg_diagnosis_" + digest,
 		ThreadID:       threadID,
@@ -308,15 +330,21 @@ func buildWorkOrderEnvelope(
 	canonical WorkOrderRef,
 	at time.Time,
 ) (model.Envelope, error) {
+	diagnosisPayload, err := json.Marshal(request.Diagnosis)
+	if err != nil {
+		return model.Envelope{}, fmt.Errorf("marshal diagnosis binding payload: %w", err)
+	}
 	payload, err := json.Marshal(map[string]any{
-		"tracking_system":       draft.TrackingSystem,
-		"workledger_project":    draft.WorkledgerProject,
-		"work_order_id":         canonical.ID,
-		"work_order_title":      canonical.Title,
-		"source_thread_id":      draft.SourceThreadID,
-		"optional_sync_targets": request.OptionalSyncTargets,
-		"confidence":            draft.Confidence,
-		"evidence_ids":          draft.EvidenceIDs,
+		"tracking_system":          draft.TrackingSystem,
+		"workledger_project":       draft.WorkledgerProject,
+		"work_order_id":            canonical.ID,
+		"work_order_title":         canonical.Title,
+		"source_thread_id":         draft.SourceThreadID,
+		"optional_sync_targets":    request.OptionalSyncTargets,
+		"confidence":               draft.Confidence,
+		"evidence_ids":             draft.EvidenceIDs,
+		"diagnosis_message_id":     promotionDiagnosisMessageID(threadID, request),
+		"diagnosis_payload_sha256": promotionPayloadSHA256(diagnosisPayload),
 	})
 	if err != nil {
 		return model.Envelope{}, fmt.Errorf("marshal work order payload: %w", err)
@@ -426,4 +454,17 @@ func (s *server) runSyncHooks(
 func stableDigest(parts ...string) string {
 	hash := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(hash[:8])
+}
+
+func promotionDiagnosisDigest(threadID string, request promoteThreadRequest) string {
+	return stableDigest(threadID, request.WorkledgerProject, request.Diagnosis.Problem)
+}
+
+func promotionDiagnosisMessageID(threadID string, request promoteThreadRequest) string {
+	return "msg_diagnosis_" + promotionDiagnosisDigest(threadID, request)
+}
+
+func promotionPayloadSHA256(payload []byte) string {
+	hash := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(hash[:])
 }
