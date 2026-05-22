@@ -2,12 +2,15 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ppiankov/hivebus/internal/model"
 )
+
+var errSinglePassedPromotionFixture = errors.New("single promotion-passed recovery fixture must use pair finalization")
 
 func TestBuildPromotedThreadRecoveryCapsuleUsesVerifiedProvenanceOnly(t *testing.T) {
 	t.Helper()
@@ -144,7 +147,8 @@ func TestBuildPromotedThreadRecoveryCapsuleRequiresPromotionAndResolvedDiagnosis
 		Confidence:          model.ConfidenceMedium,
 		Verified:            true,
 	}
-	appendTestEnvelope(t, st, diagnosisEnvelope(t, thread.ThreadID, diagnosis, thread.CreatedAt.Add(time.Minute)))
+	legacyDiagnosis := legacyPromotedDiagnosisEnvelope(t, thread.ThreadID, diagnosis, thread.CreatedAt.Add(time.Minute))
+	appendTestEnvelope(t, st, legacyDiagnosis)
 
 	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
 	if err != nil {
@@ -155,14 +159,15 @@ func TestBuildPromotedThreadRecoveryCapsuleRequiresPromotionAndResolvedDiagnosis
 	}
 
 	diagnosis.MissingInfo = nil
-	appendTestEnvelope(t, st, diagnosisEnvelopeWithID(
+	resolvedDiagnosis := legacyPromotedDiagnosisEnvelopeWithID(
 		t,
 		thread.ThreadID,
 		diagnosis,
 		"msg_diagnosis_resolved",
 		"idem_diagnosis_resolved",
 		thread.CreatedAt.Add(2*time.Minute),
-	))
+	)
+	appendTestEnvelope(t, st, resolvedDiagnosis)
 	snapshot, err = st.LoadThread(t.Context(), thread.ThreadID)
 	if err != nil {
 		t.Fatalf("LoadThread(resolved) error = %v", err)
@@ -489,18 +494,40 @@ func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForFailedOrPending
 	}
 }
 
+func TestAppendTestEnvelopeRejectsAccidentalSinglePassedPromotionFixture(t *testing.T) {
+	t.Helper()
+
+	envelope := diagnosisEnvelope(
+		t,
+		"thr_123",
+		model.Diagnosis{
+			Problem:             "Single passed fixture.",
+			LikelyCause:         "A test tried to bypass pair finalization.",
+			ProposedRemediation: []string{"Use appendAuthoritativePromotionPairForTest."},
+			EvidenceIDs:         []string{"art_smoke_log"},
+			Confidence:          model.ConfidenceHigh,
+			Verified:            true,
+		},
+		time.Date(2026, 4, 15, 6, 2, 0, 0, time.UTC),
+	)
+
+	if err := validateOrdinaryTestEnvelope(envelope); err == nil {
+		t.Fatal("expected ordinary test append helper to reject single promotion-passed fixture")
+	}
+}
+
 func appendTestEnvelope(t *testing.T, st *Store, envelope model.Envelope) {
 	t.Helper()
 
-	if envelope.Trace.Verified && isPromotionRecoveryEnvelopeType(envelope.Type) {
-		switch envelope.Trace.PromotionStatus {
-		case "":
-			appendLegacyPromotionEnvelopeForTest(t, st, envelope)
-			return
-		case model.PromotionStatusPassed:
-			appendPassedPromotionEnvelopeForTest(t, st, envelope)
-			return
-		}
+	if err := validateOrdinaryTestEnvelope(envelope); err != nil {
+		t.Fatalf("AppendEnvelope(%s) fixture error = %v", envelope.MessageID, err)
+	}
+
+	if envelope.Trace.Verified &&
+		isPromotionRecoveryEnvelopeType(envelope.Type) &&
+		envelope.Trace.PromotionStatus == "" {
+		appendLegacyPromotionEnvelopeForTest(t, st, envelope)
+		return
 	}
 
 	if err := st.AppendEnvelope(t.Context(), envelope); err != nil {
@@ -508,28 +535,21 @@ func appendTestEnvelope(t *testing.T, st *Store, envelope model.Envelope) {
 	}
 }
 
+func validateOrdinaryTestEnvelope(envelope model.Envelope) error {
+	if envelope.Trace.Verified &&
+		isPromotionRecoveryEnvelopeType(envelope.Type) &&
+		envelope.Trace.PromotionStatus == model.PromotionStatusPassed {
+		return errSinglePassedPromotionFixture
+	}
+
+	return nil
+}
+
 func appendLegacyPromotionEnvelopeForTest(t *testing.T, st *Store, envelope model.Envelope) {
 	t.Helper()
 
-	tx, err := st.db.BeginTx(t.Context(), nil)
-	if err != nil {
-		t.Fatalf("BeginTx() error = %v", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	if err := insertEnvelopeEventTx(t.Context(), tx, envelope); err != nil {
-		t.Fatalf("insertEnvelopeEventTx(%s) error = %v", envelope.MessageID, err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("Commit() error = %v", err)
-	}
-}
-
-func appendPassedPromotionEnvelopeForTest(t *testing.T, st *Store, envelope model.Envelope) {
-	t.Helper()
-
+	// WO-66: only legacy replay fixtures bypass AppendEnvelope; authoritative
+	// passed state must go through appendAuthoritativePromotionPairForTest.
 	tx, err := st.db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("BeginTx() error = %v", err)
@@ -554,6 +574,8 @@ func appendAuthoritativePromotionPairForTest(
 ) {
 	t.Helper()
 
+	// WO-66: recovery fixtures seed passed promotion truth by finalizing the
+	// complete diagnosis/work-order pair instead of raw-inserting one envelope.
 	pendingEnvelope := diagnosis
 	pendingEnvelope.MessageID = "pending_" + diagnosis.MessageID
 	pendingEnvelope.IdempotencyKey = "pending_" + diagnosis.IdempotencyKey
@@ -625,6 +647,32 @@ func diagnosisEnvelopeWithID(
 			Nonce:  "nonce_" + messageID,
 		},
 	}
+}
+
+func legacyPromotedDiagnosisEnvelope(
+	t *testing.T,
+	threadID string,
+	diagnosis model.Diagnosis,
+	at time.Time,
+) model.Envelope {
+	t.Helper()
+
+	return legacyPromotedDiagnosisEnvelopeWithID(t, threadID, diagnosis, "msg_diagnosis", "idem_diagnosis", at)
+}
+
+func legacyPromotedDiagnosisEnvelopeWithID(
+	t *testing.T,
+	threadID string,
+	diagnosis model.Diagnosis,
+	messageID string,
+	idempotencyKey string,
+	at time.Time,
+) model.Envelope {
+	t.Helper()
+
+	envelope := diagnosisEnvelopeWithID(t, threadID, diagnosis, messageID, idempotencyKey, at)
+	envelope.Trace.PromotionStatus = ""
+	return envelope
 }
 
 func workOrderEnvelope(threadID string, at time.Time) model.Envelope {
