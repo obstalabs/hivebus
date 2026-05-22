@@ -19,7 +19,11 @@ WO-54 draws a hard line between promotion attempts and promotion truth.
   `trace.promotion_status=passed`, and the payloads must pass the same
   semantic checks recovery depends on: the diagnosis validates, has
   `verified=true`, has no unresolved `missing_info`, and the work-order receipt
-  declares a `tracking_system` plus a `source_thread_id` matching the thread.
+  declares `tracking_system=workledger`, `workledger_project`, positive
+  `work_order_id`, `work_order_title`, and a `source_thread_id` matching the
+  thread. Non-Workledger execution receipts are not accepted by
+  `FinalizePromotion`; they need their own explicit receipt contract rather
+  than weakening the canonical Workledger handoff.
 - Operators cannot append fresh verified `diagnosis.proposed` or
   `work_order.create` envelopes with empty or `passed`
   `trace.promotion_status` through `/v0/threads/{threadID}/messages`; empty

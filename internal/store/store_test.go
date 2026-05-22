@@ -250,6 +250,15 @@ func TestStoreTracksPendingPromotionLaneSeparatelyFromVerifiedEnvelopes(t *testi
 	if capsule.Promotion.SourceMessageID != verifiedWorkOrder.MessageID {
 		t.Fatalf("expected recovery promotion source %q, got %q", verifiedWorkOrder.MessageID, capsule.Promotion.SourceMessageID)
 	}
+	if capsule.Promotion.WorkledgerProject != "hivebus" {
+		t.Fatalf("expected recovery workledger project hivebus, got %q", capsule.Promotion.WorkledgerProject)
+	}
+	if capsule.Promotion.WorkOrderID != 65 {
+		t.Fatalf("expected recovery work order id 65, got %d", capsule.Promotion.WorkOrderID)
+	}
+	if capsule.Promotion.WorkOrderTitle == "" {
+		t.Fatal("expected recovery work order title to be preserved")
+	}
 }
 
 func TestFinalizePromotionRejectsIncompleteEnvelopeSet(t *testing.T) {
@@ -518,6 +527,74 @@ func TestFinalizePromotionRejectsWorkOrderWithoutTrackingSystem(t *testing.T) {
 		workOrder,
 	)
 	requireRejectedFinalizeKeepsPending(t, st, thread.ThreadID, err)
+}
+
+func TestFinalizePromotionRejectsWorkOrderWithoutCanonicalWorkledgerFields(t *testing.T) {
+	t.Helper()
+
+	tests := []struct {
+		name    string
+		payload func(threadID string) json.RawMessage
+	}{
+		{
+			name: "blank workledger project",
+			payload: func(threadID string) json.RawMessage {
+				return json.RawMessage(`{"tracking_system":"workledger","workledger_project":"","work_order_id":65,"work_order_title":"FinalizePromotion must require canonical Workledger receipt fields","source_thread_id":"` + threadID + `","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`)
+			},
+		},
+		{
+			name: "zero work order id",
+			payload: func(threadID string) json.RawMessage {
+				return json.RawMessage(`{"tracking_system":"workledger","workledger_project":"hivebus","work_order_id":0,"work_order_title":"FinalizePromotion must require canonical Workledger receipt fields","source_thread_id":"` + threadID + `","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`)
+			},
+		},
+		{
+			name: "blank work order title",
+			payload: func(threadID string) json.RawMessage {
+				return json.RawMessage(`{"tracking_system":"workledger","workledger_project":"hivebus","work_order_id":65,"work_order_title":"","source_thread_id":"` + threadID + `","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`)
+			},
+		},
+		{
+			name: "non workledger tracking system",
+			payload: func(threadID string) json.RawMessage {
+				return json.RawMessage(`{"tracking_system":"other","workledger_project":"hivebus","work_order_id":65,"work_order_title":"FinalizePromotion must require canonical Workledger receipt fields","source_thread_id":"` + threadID + `","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := openTestStore(t)
+			thread := sampleThread()
+			if _, err := st.AppendThread(t.Context(), thread); err != nil {
+				t.Fatalf("AppendThread() error = %v", err)
+			}
+
+			record := recordPendingPromotionForFinalizeTest(t, st, thread)
+			diagnosis := promotedDiagnosisEnvelope(
+				thread.ThreadID,
+				"msg_diag_verified",
+				"idem_diag_verified",
+				record.UpdatedAt.Add(time.Minute),
+			)
+			workOrder := promotedWorkOrderEnvelope(
+				thread.ThreadID,
+				"msg_work_order_verified",
+				"idem_work_order_verified",
+				record.UpdatedAt.Add(2*time.Minute),
+			)
+			workOrder.Payload = tt.payload(thread.ThreadID)
+
+			err := st.FinalizePromotion(
+				t.Context(),
+				record.PendingMessageID,
+				record.UpdatedAt.Add(3*time.Minute),
+				diagnosis,
+				workOrder,
+			)
+			requireRejectedFinalizeKeepsPending(t, st, thread.ThreadID, err)
+		})
+	}
 }
 
 func TestFinalizePromotionRejectsMismatchedWorkOrderSourceThread(t *testing.T) {

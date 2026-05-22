@@ -230,20 +230,34 @@ func validateFinalizedDiagnosisPayload(envelope model.Envelope) error {
 	return nil
 }
 
-// WO-65: the work-order receipt must point back at this exact thread before
-// recovery can treat it as the authoritative promotion receipt.
+// WO-65/WO-67: the work-order receipt must point back at this exact thread and
+// name the canonical Workledger WO before recovery can treat it as authoritative.
 func validateFinalizedWorkOrderPayload(threadID string, envelope model.Envelope) error {
 	var payload promotedWorkOrderPayload
 	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 		return fmt.Errorf("invalid verified promotion work_order.create payload: %w", err)
 	}
-	if strings.TrimSpace(payload.TrackingSystem) == "" {
+
+	trackingSystem := strings.TrimSpace(payload.TrackingSystem)
+	if trackingSystem == "" {
 		return errors.New("verified promotion work_order.create tracking_system is required")
+	}
+	if trackingSystem != "workledger" {
+		return errors.New("verified promotion work_order.create tracking_system must be workledger")
+	}
+	if strings.TrimSpace(payload.WorkledgerProject) == "" {
+		return errors.New("verified promotion work_order.create workledger_project is required")
+	}
+	if payload.WorkOrderID <= 0 {
+		return errors.New("verified promotion work_order.create work_order_id must be positive")
+	}
+	if strings.TrimSpace(payload.WorkOrderTitle) == "" {
+		return errors.New("verified promotion work_order.create work_order_title is required")
 	}
 	if strings.TrimSpace(payload.SourceThreadID) == "" {
 		return errors.New("verified promotion work_order.create source_thread_id is required")
 	}
-	if payload.SourceThreadID != threadID {
+	if strings.TrimSpace(payload.SourceThreadID) != threadID {
 		return errors.New("verified promotion work_order.create source_thread_id does not match thread")
 	}
 
