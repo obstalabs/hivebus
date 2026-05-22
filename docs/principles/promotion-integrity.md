@@ -16,7 +16,10 @@ WO-54 draws a hard line between promotion attempts and promotion truth.
   - one verified `diagnosis.proposed` envelope, and
   - one verified `work_order.create` envelope.
   Every finalized envelope must carry `trace.verified=true` and
-  `trace.promotion_status=passed`.
+  `trace.promotion_status=passed`, and the payloads must pass the same
+  semantic checks recovery depends on: the diagnosis validates, has
+  `verified=true`, has no unresolved `missing_info`, and the work-order receipt
+  declares a `tracking_system` plus a `source_thread_id` matching the thread.
 - Operators cannot append fresh verified `diagnosis.proposed` or
   `work_order.create` envelopes with empty or `passed`
   `trace.promotion_status` through `/v0/threads/{threadID}/messages`; empty

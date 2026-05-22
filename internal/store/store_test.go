@@ -239,6 +239,17 @@ func TestStoreTracksPendingPromotionLaneSeparatelyFromVerifiedEnvelopes(t *testi
 			t.Fatalf("expected finalized promotion status passed, got %#v", envelope.Trace)
 		}
 	}
+
+	capsule, err := BuildPromotedThreadRecoveryCapsule(snapshot, pendingEnvelope.SentAt.Add(4*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildPromotedThreadRecoveryCapsule() error = %v", err)
+	}
+	if capsule.VerifiedDiagnosis.SourceMessageID != verifiedDiagnosis.MessageID {
+		t.Fatalf("expected recovery diagnosis source %q, got %q", verifiedDiagnosis.MessageID, capsule.VerifiedDiagnosis.SourceMessageID)
+	}
+	if capsule.Promotion.SourceMessageID != verifiedWorkOrder.MessageID {
+		t.Fatalf("expected recovery promotion source %q, got %q", verifiedWorkOrder.MessageID, capsule.Promotion.SourceMessageID)
+	}
 }
 
 func TestFinalizePromotionRejectsIncompleteEnvelopeSet(t *testing.T) {
@@ -407,6 +418,142 @@ func TestFinalizePromotionRejectsUnverifiedPassedEnvelope(t *testing.T) {
 	}
 }
 
+func TestFinalizePromotionRejectsInvalidDiagnosisPayload(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	record := recordPendingPromotionForFinalizeTest(t, st, thread)
+	diagnosis := promotedDiagnosisEnvelope(
+		thread.ThreadID,
+		"msg_diag_verified",
+		"idem_diag_verified",
+		record.UpdatedAt.Add(time.Minute),
+	)
+	diagnosis.Payload = json.RawMessage(`{"problem":"promotion integrity","proposed_remediation":["require complete verified pair"],"evidence_ids":["art_smoke_log"],"confidence":"high","verified":true}`)
+	workOrder := promotedWorkOrderEnvelope(
+		thread.ThreadID,
+		"msg_work_order_verified",
+		"idem_work_order_verified",
+		record.UpdatedAt.Add(2*time.Minute),
+	)
+
+	err := st.FinalizePromotion(
+		t.Context(),
+		record.PendingMessageID,
+		record.UpdatedAt.Add(3*time.Minute),
+		diagnosis,
+		workOrder,
+	)
+	requireRejectedFinalizeKeepsPending(t, st, thread.ThreadID, err)
+}
+
+func TestFinalizePromotionRejectsUnverifiedDiagnosisPayload(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	record := recordPendingPromotionForFinalizeTest(t, st, thread)
+	diagnosis := promotedDiagnosisEnvelope(
+		thread.ThreadID,
+		"msg_diag_verified",
+		"idem_diag_verified",
+		record.UpdatedAt.Add(time.Minute),
+	)
+	diagnosis.Payload = json.RawMessage(`{"problem":"promotion integrity","likely_cause":"finalize path","proposed_remediation":["require complete verified pair"],"evidence_ids":["art_smoke_log"],"confidence":"high","verified":false}`)
+	workOrder := promotedWorkOrderEnvelope(
+		thread.ThreadID,
+		"msg_work_order_verified",
+		"idem_work_order_verified",
+		record.UpdatedAt.Add(2*time.Minute),
+	)
+
+	err := st.FinalizePromotion(
+		t.Context(),
+		record.PendingMessageID,
+		record.UpdatedAt.Add(3*time.Minute),
+		diagnosis,
+		workOrder,
+	)
+	requireRejectedFinalizeKeepsPending(t, st, thread.ThreadID, err)
+}
+
+func TestFinalizePromotionRejectsWorkOrderWithoutTrackingSystem(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	record := recordPendingPromotionForFinalizeTest(t, st, thread)
+	diagnosis := promotedDiagnosisEnvelope(
+		thread.ThreadID,
+		"msg_diag_verified",
+		"idem_diag_verified",
+		record.UpdatedAt.Add(time.Minute),
+	)
+	workOrder := promotedWorkOrderEnvelope(
+		thread.ThreadID,
+		"msg_work_order_verified",
+		"idem_work_order_verified",
+		record.UpdatedAt.Add(2*time.Minute),
+	)
+	workOrder.Payload = json.RawMessage(`{"workledger_project":"hivebus","work_order_id":65,"work_order_title":"FinalizePromotion must require a complete verified promotion set","source_thread_id":"` + thread.ThreadID + `","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`)
+
+	err := st.FinalizePromotion(
+		t.Context(),
+		record.PendingMessageID,
+		record.UpdatedAt.Add(3*time.Minute),
+		diagnosis,
+		workOrder,
+	)
+	requireRejectedFinalizeKeepsPending(t, st, thread.ThreadID, err)
+}
+
+func TestFinalizePromotionRejectsMismatchedWorkOrderSourceThread(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	record := recordPendingPromotionForFinalizeTest(t, st, thread)
+	diagnosis := promotedDiagnosisEnvelope(
+		thread.ThreadID,
+		"msg_diag_verified",
+		"idem_diag_verified",
+		record.UpdatedAt.Add(time.Minute),
+	)
+	workOrder := promotedWorkOrderEnvelope(
+		thread.ThreadID,
+		"msg_work_order_verified",
+		"idem_work_order_verified",
+		record.UpdatedAt.Add(2*time.Minute),
+	)
+	workOrder.Payload = json.RawMessage(`{"tracking_system":"workledger","workledger_project":"hivebus","work_order_id":65,"work_order_title":"FinalizePromotion must require a complete verified promotion set","source_thread_id":"thr_other","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`)
+
+	err := st.FinalizePromotion(
+		t.Context(),
+		record.PendingMessageID,
+		record.UpdatedAt.Add(3*time.Minute),
+		diagnosis,
+		workOrder,
+	)
+	requireRejectedFinalizeKeepsPending(t, st, thread.ThreadID, err)
+}
+
 func TestStoreAppendsNeuroRouterRunReceipts(t *testing.T) {
 	t.Helper()
 
@@ -451,6 +598,49 @@ func openTestStore(t *testing.T) *Store {
 	})
 
 	return st
+}
+
+func recordPendingPromotionForFinalizeTest(
+	t *testing.T,
+	st *Store,
+	thread model.Thread,
+) PromotionPendingRecord {
+	t.Helper()
+
+	pendingEnvelope := sampleEnvelope(thread.ThreadID, "msg_diag", "idem_diag")
+	pendingEnvelope.Type = model.MessageTypeDiagnosisPropose
+	pendingEnvelope.Trace.Verified = true
+	pendingEnvelope.Trace.PromotionStatus = model.PromotionStatusPending
+	record := PromotionPendingRecord{
+		PendingMessageID: "pending_msg_diag",
+		Envelope:         pendingEnvelope,
+		Status:           model.PromotionStatusPending,
+		UpdatedAt:        pendingEnvelope.SentAt,
+	}
+	if err := st.RecordPromotionPending(t.Context(), record); err != nil {
+		t.Fatalf("RecordPromotionPending() error = %v", err)
+	}
+
+	return record
+}
+
+func requireRejectedFinalizeKeepsPending(t *testing.T, st *Store, threadID string, err error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected FinalizePromotion() rejection")
+	}
+
+	snapshot, loadErr := st.LoadThread(t.Context(), threadID)
+	if loadErr != nil {
+		t.Fatalf("LoadThread() error = %v", loadErr)
+	}
+	if len(snapshot.PendingPromotions) != 1 {
+		t.Fatalf("expected pending promotion lane to remain active after rejected finalize, got %#v", snapshot.PendingPromotions)
+	}
+	if len(snapshot.Envelopes) != 0 {
+		t.Fatalf("expected no verified envelopes after rejected finalize, got %#v", snapshot.Envelopes)
+	}
 }
 
 func sampleThread() model.Thread {

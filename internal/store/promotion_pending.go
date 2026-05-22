@@ -187,10 +187,16 @@ func validateFinalizePromotionEnvelopes(envelopes []model.Envelope) (string, err
 			if hasDiagnosis {
 				return "", errors.New("verified promotion finalization accepts only one diagnosis.proposed envelope")
 			}
+			if err := validateFinalizedDiagnosisPayload(envelope); err != nil {
+				return "", err
+			}
 			hasDiagnosis = true
 		case model.MessageTypeWorkOrderCreate:
 			if hasWorkOrder {
 				return "", errors.New("verified promotion finalization accepts only one work_order.create envelope")
+			}
+			if err := validateFinalizedWorkOrderPayload(threadID, envelope); err != nil {
+				return "", err
 			}
 			hasWorkOrder = true
 		default:
@@ -202,6 +208,46 @@ func validateFinalizePromotionEnvelopes(envelopes []model.Envelope) (string, err
 	}
 
 	return threadID, nil
+}
+
+// WO-65: trace-valid diagnosis envelopes must also carry recovery-safe payload
+// truth before they are promoted out of the pending lane.
+func validateFinalizedDiagnosisPayload(envelope model.Envelope) error {
+	var diagnosis model.Diagnosis
+	if err := json.Unmarshal(envelope.Payload, &diagnosis); err != nil {
+		return fmt.Errorf("invalid verified promotion diagnosis payload: %w", err)
+	}
+	if err := diagnosis.Validate(); err != nil {
+		return fmt.Errorf("invalid verified promotion diagnosis: %w", err)
+	}
+	if !diagnosis.Verified {
+		return errors.New("verified promotion diagnosis payload must carry verified=true")
+	}
+	if len(diagnosis.MissingInfo) > 0 {
+		return errors.New("verified promotion diagnosis payload must not contain missing_info")
+	}
+
+	return nil
+}
+
+// WO-65: the work-order receipt must point back at this exact thread before
+// recovery can treat it as the authoritative promotion receipt.
+func validateFinalizedWorkOrderPayload(threadID string, envelope model.Envelope) error {
+	var payload promotedWorkOrderPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		return fmt.Errorf("invalid verified promotion work_order.create payload: %w", err)
+	}
+	if strings.TrimSpace(payload.TrackingSystem) == "" {
+		return errors.New("verified promotion work_order.create tracking_system is required")
+	}
+	if strings.TrimSpace(payload.SourceThreadID) == "" {
+		return errors.New("verified promotion work_order.create source_thread_id is required")
+	}
+	if payload.SourceThreadID != threadID {
+		return errors.New("verified promotion work_order.create source_thread_id does not match thread")
+	}
+
+	return nil
 }
 
 func insertPromotionPendingEventTx(
