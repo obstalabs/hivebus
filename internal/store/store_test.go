@@ -461,6 +461,40 @@ func TestFinalizePromotionRejectsInvalidDiagnosisPayload(t *testing.T) {
 	requireRejectedFinalizeKeepsPending(t, st, thread.ThreadID, err)
 }
 
+func TestFinalizePromotionRejectsBlankEvidenceDiagnosisPayload(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	if _, err := st.AppendThread(t.Context(), thread); err != nil {
+		t.Fatalf("AppendThread() error = %v", err)
+	}
+
+	record := recordPendingPromotionForFinalizeTest(t, st, thread)
+	diagnosis := promotedDiagnosisEnvelope(
+		thread.ThreadID,
+		"msg_diag_verified",
+		"idem_diag_verified",
+		record.UpdatedAt.Add(time.Minute),
+	)
+	diagnosis.Payload = json.RawMessage(`{"problem":"promotion integrity","likely_cause":"finalize path","proposed_remediation":["require complete verified pair"],"evidence_ids":["  "],"confidence":"high","verified":true}`)
+	workOrder := promotedWorkOrderEnvelope(
+		thread.ThreadID,
+		"msg_work_order_verified",
+		"idem_work_order_verified",
+		record.UpdatedAt.Add(2*time.Minute),
+	)
+
+	err := st.FinalizePromotion(
+		t.Context(),
+		record.PendingMessageID,
+		record.UpdatedAt.Add(3*time.Minute),
+		diagnosis,
+		workOrder,
+	)
+	requireRejectedFinalizeKeepsPending(t, st, thread.ThreadID, err)
+}
+
 func TestFinalizePromotionRejectsUnverifiedDiagnosisPayload(t *testing.T) {
 	t.Helper()
 

@@ -35,6 +35,44 @@ func TestDiagnosisValidateRejectsUnknownConfidence(t *testing.T) {
 	}
 }
 
+func TestDiagnosisValidateRejectsBlankEvidenceIDs(t *testing.T) {
+	t.Helper()
+
+	testCases := []struct {
+		name        string
+		evidenceIDs []string
+	}{
+		{
+			name:        "empty string",
+			evidenceIDs: []string{""},
+		},
+		{
+			name:        "whitespace only",
+			evidenceIDs: []string{" \t "},
+		},
+		{
+			name:        "one blank among valid ids",
+			evidenceIDs: []string{"art_logs", ""},
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			diagnosis := Diagnosis{
+				Problem:             "The API returns 502 responses.",
+				LikelyCause:         "The database connection pool is exhausted.",
+				ProposedRemediation: []string{"Reduce worker fan-out."},
+				EvidenceIDs:         tt.evidenceIDs,
+				Confidence:          ConfidenceHigh,
+			}
+
+			if err := diagnosis.Validate(); err == nil {
+				t.Fatal("Validate() expected an error")
+			}
+		})
+	}
+}
+
 func TestDiagnosisValidateRejectsMissingRequiredFields(t *testing.T) {
 	t.Helper()
 

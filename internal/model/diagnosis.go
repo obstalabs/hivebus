@@ -54,6 +54,14 @@ func (d Diagnosis) Validate() error {
 		}
 	}
 
+	// WO-68: evidence-backed diagnoses must name concrete evidence handles, not
+	// placeholder entries that only satisfy array length.
+	for _, evidenceID := range d.EvidenceIDs {
+		if strings.TrimSpace(evidenceID) == "" {
+			return errors.New("evidence ids must not be empty")
+		}
+	}
+
 	for _, info := range d.MissingInfo {
 		if strings.TrimSpace(info) == "" {
 			return errors.New("missing_info entries must not be empty")
