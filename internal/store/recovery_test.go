@@ -495,6 +495,91 @@ func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForFailedOrPending
 	}
 }
 
+func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForInvalidPassedEvidence(t *testing.T) {
+	t.Helper()
+
+	tests := []struct {
+		name   string
+		poison func(t *testing.T, thread model.Thread, at time.Time) model.Envelope
+	}{
+		{
+			name: "invalid passed diagnosis payload",
+			poison: func(t *testing.T, thread model.Thread, at time.Time) model.Envelope {
+				envelope := passedDiagnosisEnvelopeWithIDForFinalizeTest(
+					t,
+					thread.ThreadID,
+					model.Diagnosis{
+						Problem:             "Invalid explicit passed diagnosis.",
+						LikelyCause:         "The stored payload will be replaced with an invalid diagnosis.",
+						ProposedRemediation: []string{"Ignore this poisoned passed candidate."},
+						EvidenceIDs:         []string{"art_smoke_log"},
+						Confidence:          model.ConfidenceHigh,
+						Verified:            true,
+					},
+					"msg_diagnosis_invalid_passed",
+					"idem_diagnosis_invalid_passed",
+					at,
+				)
+				envelope.Payload = json.RawMessage(`{"problem":"invalid passed diagnosis","proposed_remediation":["missing likely cause"],"evidence_ids":["art_smoke_log"],"confidence":"high","verified":true}`)
+				return envelope
+			},
+		},
+		{
+			name: "missing tracking system passed receipt",
+			poison: func(t *testing.T, thread model.Thread, at time.Time) model.Envelope {
+				envelope := workOrderEnvelope(thread.ThreadID, at)
+				envelope.MessageID = "msg_work_order_missing_tracking_passed"
+				envelope.IdempotencyKey = "idem_work_order_missing_tracking_passed"
+				envelope.Payload = json.RawMessage(`{"workledger_project":"hivebus","work_order_id":61,"work_order_title":"Invalid explicit passed receipt","source_thread_id":"` + thread.ThreadID + `","confidence":"high","evidence_ids":["art_smoke_log"]}`)
+				return envelope
+			},
+		},
+		{
+			name: "wrong thread passed receipt",
+			poison: func(t *testing.T, thread model.Thread, at time.Time) model.Envelope {
+				envelope := workOrderEnvelope(thread.ThreadID, at)
+				envelope.MessageID = "msg_work_order_wrong_thread_passed"
+				envelope.IdempotencyKey = "idem_work_order_wrong_thread_passed"
+				envelope.Payload = json.RawMessage(`{"tracking_system":"workledger","workledger_project":"hivebus","work_order_id":61,"work_order_title":"Invalid explicit passed receipt","source_thread_id":"thr_other","confidence":"high","evidence_ids":["art_smoke_log"]}`)
+				return envelope
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := openTestStore(t)
+			thread := sampleThread()
+			thread.Status = model.ThreadStatusReadyForWork
+			if _, err := st.AppendThread(t.Context(), thread); err != nil {
+				t.Fatalf("AppendThread() error = %v", err)
+			}
+
+			legacyDiagnosis, legacyPromotion := appendLegacyPromotedPairForWO61Test(t, st, thread)
+			appendPoisonedPassedPromotionEnvelopeForWO61Test(
+				t,
+				st,
+				tt.poison(t, thread, thread.CreatedAt.Add(3*time.Minute)),
+			)
+
+			snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+			if err != nil {
+				t.Fatalf("LoadThread() error = %v", err)
+			}
+			capsule, err := BuildPromotedThreadRecoveryCapsule(snapshot, thread.CreatedAt.Add(4*time.Minute))
+			if err != nil {
+				t.Fatalf("BuildPromotedThreadRecoveryCapsule() error = %v", err)
+			}
+			if capsule.VerifiedDiagnosis.SourceMessageID != legacyDiagnosis.MessageID {
+				t.Fatalf("expected legacy diagnosis to remain active, got %#v", capsule.VerifiedDiagnosis)
+			}
+			if capsule.Promotion.SourceMessageID != legacyPromotion.MessageID {
+				t.Fatalf("expected legacy promotion receipt to remain active, got %#v", capsule.Promotion)
+			}
+		})
+	}
+}
+
 func TestAppendTestEnvelopeRejectsAccidentalSinglePassedPromotionFixture(t *testing.T) {
 	t.Helper()
 
@@ -537,6 +622,63 @@ func TestDiagnosisEnvelopeDefaultsToNonPassedPromotionState(t *testing.T) {
 
 	if envelope.Trace.PromotionStatus == model.PromotionStatusPassed {
 		t.Fatal("ordinary diagnosis fixture must not default to promotion_status=passed")
+	}
+}
+
+func appendLegacyPromotedPairForWO61Test(
+	t *testing.T,
+	st *Store,
+	thread model.Thread,
+) (model.Envelope, model.Envelope) {
+	t.Helper()
+
+	legacyDiagnosis := legacyPromotedDiagnosisEnvelopeWithID(
+		t,
+		thread.ThreadID,
+		model.Diagnosis{
+			Problem:             "Legacy promoted diagnosis.",
+			LikelyCause:         "Invalid passed evidence must not close the compatibility window.",
+			ProposedRemediation: []string{"Keep using the legacy pair until a valid passed pair exists."},
+			EvidenceIDs:         []string{"art_smoke_log"},
+			Confidence:          model.ConfidenceMedium,
+			Verified:            true,
+		},
+		"msg_diagnosis_legacy_invalid_passed",
+		"idem_diagnosis_legacy_invalid_passed",
+		thread.CreatedAt.Add(time.Minute),
+	)
+	appendTestEnvelope(t, st, legacyDiagnosis)
+
+	legacyPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(2*time.Minute))
+	legacyPromotion.MessageID = "msg_work_order_legacy_invalid_passed"
+	legacyPromotion.IdempotencyKey = "idem_work_order_legacy_invalid_passed"
+	legacyPromotion.Trace.PromotionStatus = ""
+	appendTestEnvelope(t, st, legacyPromotion)
+
+	return legacyDiagnosis, legacyPromotion
+}
+
+func appendPoisonedPassedPromotionEnvelopeForWO61Test(
+	t *testing.T,
+	st *Store,
+	envelope model.Envelope,
+) {
+	t.Helper()
+
+	// WO-61: recovery must tolerate already-stored poisoned passed evidence
+	// without reopening a production append path around FinalizePromotion.
+	tx, err := st.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("begin poisoned promotion fixture tx: %v", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if err := insertEnvelopeEventTx(t.Context(), tx, envelope); err != nil {
+		t.Fatalf("insert poisoned promotion fixture %s: %v", envelope.MessageID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit poisoned promotion fixture %s: %v", envelope.MessageID, err)
 	}
 }
 

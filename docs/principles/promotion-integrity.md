@@ -8,8 +8,9 @@ WO-54 draws a hard line between promotion attempts and promotion truth.
   - carry `trace.promotion_status=passed`, or
   - predate the field entirely and therefore have an empty status during the
     WO-61 compatibility window, but only when the thread contains no
-    authoritative verified promotion-passed envelopes yet. Pending, failed, or
-    unverified promotion envelopes do not close that compatibility window.
+    authoritative verified promotion-passed pair yet. Pending, failed,
+    unverified, malformed, or wrong-thread promotion envelopes do not close that
+    compatibility window.
 - `FinalizePromotion` is the only path that can move promotion envelopes into
   the verified lane, and every finalization must commit the complete
   authoritative pair for one thread:

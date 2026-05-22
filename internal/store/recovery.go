@@ -40,12 +40,9 @@ func BuildPromotedThreadRecoveryCapsule(
 		generatedAt = time.Now().UTC()
 	}
 
-	diagnosisEnvelope, diagnosis, err := latestVerifiedDiagnosis(snapshot.Envelopes)
+	diagnosisEnvelope, diagnosis, err := latestVerifiedDiagnosis(snapshot.Thread.ThreadID, snapshot.Envelopes)
 	if err != nil {
 		return model.PromotedThreadRecoveryCapsule{}, err
-	}
-	if len(diagnosis.MissingInfo) > 0 {
-		return model.PromotedThreadRecoveryCapsule{}, errors.New("promoted recovery capsule requires resolved missing_info")
 	}
 
 	promotionEnvelope, promotion, err := latestPromotionReceipt(snapshot.Thread.ThreadID, snapshot.Envelopes)
@@ -93,28 +90,28 @@ func BuildPromotedThreadRecoveryCapsule(
 	return capsule, nil
 }
 
-func latestVerifiedDiagnosis(envelopes []model.Envelope) (model.Envelope, model.Diagnosis, error) {
+func latestVerifiedDiagnosis(
+	threadID string,
+	envelopes []model.Envelope,
+) (model.Envelope, model.Diagnosis, error) {
 	var selectedEnvelope model.Envelope
 	var selected model.Diagnosis
 	found := false
-	legacyAllowed := !hasAuthoritativePromotionPass(envelopes)
+	authoritativePairExists := hasSemanticallyValidAuthoritativePromotionPair(threadID, envelopes)
 
 	for _, envelope := range envelopes {
 		if envelope.Type != model.MessageTypeDiagnosisPropose ||
 			!envelope.Trace.Verified ||
-			!promotionPassedForRecovery(envelope, legacyAllowed) {
+			!promotionPassedForRecovery(envelope, authoritativePairExists) {
 			continue
 		}
 
-		var diagnosis model.Diagnosis
-		if err := json.Unmarshal(envelope.Payload, &diagnosis); err != nil {
-			return model.Envelope{}, model.Diagnosis{}, fmt.Errorf("invalid verified diagnosis payload: %w", err)
-		}
-		if err := diagnosis.Validate(); err != nil {
-			return model.Envelope{}, model.Diagnosis{}, fmt.Errorf("invalid verified diagnosis: %w", err)
-		}
-		if !diagnosis.Verified {
+		diagnosis, err := recoveryDiagnosisFromEnvelope(envelope)
+		if err != nil && envelope.Trace.PromotionStatus == model.PromotionStatusPassed {
 			continue
+		}
+		if err != nil {
+			return model.Envelope{}, model.Diagnosis{}, err
 		}
 
 		selectedEnvelope = envelope
@@ -136,27 +133,25 @@ func latestPromotionReceipt(
 	var selectedEnvelope model.Envelope
 	var selected promotedWorkOrderPayload
 	found := false
-	legacyAllowed := !hasAuthoritativePromotionPass(envelopes)
+	authoritativePairExists := hasSemanticallyValidAuthoritativePromotionPair(threadID, envelopes)
 
 	for _, envelope := range envelopes {
 		if envelope.Type != model.MessageTypeWorkOrderCreate ||
 			!envelope.Trace.Verified ||
-			!promotionPassedForRecovery(envelope, legacyAllowed) {
+			!promotionPassedForRecovery(envelope, authoritativePairExists) {
 			continue
 		}
 
-		var payload promotedWorkOrderPayload
-		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return model.Envelope{}, promotedWorkOrderPayload{}, fmt.Errorf("invalid promotion receipt payload: %w", err)
+		payload, err := recoveryPromotionReceiptFromEnvelope(
+			threadID,
+			envelope,
+			envelope.Trace.PromotionStatus == "",
+		)
+		if err != nil && envelope.Trace.PromotionStatus == model.PromotionStatusPassed {
+			continue
 		}
-		if strings.TrimSpace(payload.SourceThreadID) == "" {
-			payload.SourceThreadID = threadID
-		}
-		if strings.TrimSpace(payload.TrackingSystem) == "" {
-			return model.Envelope{}, promotedWorkOrderPayload{}, errors.New("promotion receipt tracking_system is required")
-		}
-		if payload.SourceThreadID != threadID {
-			return model.Envelope{}, promotedWorkOrderPayload{}, errors.New("promotion receipt source_thread_id does not match thread")
+		if err != nil {
+			return model.Envelope{}, promotedWorkOrderPayload{}, err
 		}
 
 		selectedEnvelope = envelope
@@ -172,28 +167,98 @@ func latestPromotionReceipt(
 }
 
 // WO-61: legacy fallback is bounded to all-legacy promoted threads only; once
-// a thread has authoritative verified promotion-passed evidence, empty-status
-// promotion envelopes no longer qualify for recovery.
-func promotionPassedForRecovery(envelope model.Envelope, legacyAllowed bool) bool {
+// a thread has a semantically valid authoritative promotion-passed pair,
+// empty-status promotion envelopes no longer qualify for recovery.
+func promotionPassedForRecovery(envelope model.Envelope, authoritativePairExists bool) bool {
 	switch envelope.Trace.PromotionStatus {
 	case model.PromotionStatusPassed:
-		return true
+		return authoritativePairExists
 	case "":
-		return legacyAllowed
+		return !authoritativePairExists
 	default:
 		return false
 	}
 }
 
-func hasAuthoritativePromotionPass(envelopes []model.Envelope) bool {
+func hasSemanticallyValidAuthoritativePromotionPair(threadID string, envelopes []model.Envelope) bool {
+	hasDiagnosis := false
+	hasPromotion := false
+
 	for _, envelope := range envelopes {
 		if !isAuthoritativePromotionEnvelope(envelope) {
 			continue
 		}
-		return true
+		switch envelope.Type {
+		case model.MessageTypeDiagnosisPropose:
+			if _, err := recoveryDiagnosisFromEnvelope(envelope); err == nil {
+				hasDiagnosis = true
+			}
+		case model.MessageTypeWorkOrderCreate:
+			if _, err := recoveryPromotionReceiptFromEnvelope(threadID, envelope, false); err == nil {
+				hasPromotion = true
+			}
+		}
+		if hasDiagnosis && hasPromotion {
+			return true
+		}
 	}
 
 	return false
+}
+
+func recoveryDiagnosisFromEnvelope(envelope model.Envelope) (model.Diagnosis, error) {
+	var diagnosis model.Diagnosis
+	if err := json.Unmarshal(envelope.Payload, &diagnosis); err != nil {
+		return model.Diagnosis{}, fmt.Errorf("invalid verified diagnosis payload: %w", err)
+	}
+	if err := diagnosis.Validate(); err != nil {
+		return model.Diagnosis{}, fmt.Errorf("invalid verified diagnosis: %w", err)
+	}
+	if !diagnosis.Verified {
+		return model.Diagnosis{}, errors.New("verified diagnosis payload must carry verified=true")
+	}
+	if len(diagnosis.MissingInfo) > 0 {
+		return model.Diagnosis{}, errors.New("promoted recovery capsule requires resolved missing_info")
+	}
+
+	return diagnosis, nil
+}
+
+func recoveryPromotionReceiptFromEnvelope(
+	threadID string,
+	envelope model.Envelope,
+	allowLegacySourceDefault bool,
+) (promotedWorkOrderPayload, error) {
+	var payload promotedWorkOrderPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		return promotedWorkOrderPayload{}, fmt.Errorf("invalid promotion receipt payload: %w", err)
+	}
+	if allowLegacySourceDefault && strings.TrimSpace(payload.SourceThreadID) == "" {
+		payload.SourceThreadID = threadID
+	}
+	if strings.TrimSpace(payload.TrackingSystem) == "" {
+		return promotedWorkOrderPayload{}, errors.New("promotion receipt tracking_system is required")
+	}
+	if payload.SourceThreadID != threadID {
+		return promotedWorkOrderPayload{}, errors.New("promotion receipt source_thread_id does not match thread")
+	}
+	if envelope.Trace.PromotionStatus != model.PromotionStatusPassed {
+		return payload, nil
+	}
+	if strings.TrimSpace(payload.TrackingSystem) != "workledger" {
+		return promotedWorkOrderPayload{}, errors.New("promotion receipt tracking_system must be workledger")
+	}
+	if strings.TrimSpace(payload.WorkledgerProject) == "" {
+		return promotedWorkOrderPayload{}, errors.New("promotion receipt workledger_project is required")
+	}
+	if payload.WorkOrderID <= 0 {
+		return promotedWorkOrderPayload{}, errors.New("promotion receipt work_order_id must be positive")
+	}
+	if strings.TrimSpace(payload.WorkOrderTitle) == "" {
+		return promotedWorkOrderPayload{}, errors.New("promotion receipt work_order_title is required")
+	}
+
+	return payload, nil
 }
 
 func recoveryEvidenceRefs(
