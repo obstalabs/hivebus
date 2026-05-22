@@ -84,10 +84,6 @@ func (s *server) handlePromoteThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pendingRecord := buildPendingPromotionRecord(diagnosisEnvelope, now)
-	if err := s.store.RecordPromotionPending(r.Context(), pendingRecord); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 
 	draft, err := work.DraftFromThread(request.WorkledgerProject, snapshot.Thread, request.Diagnosis)
 	if err != nil {
@@ -100,6 +96,21 @@ func (s *server) handlePromoteThread(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(request.OptionalSyncTargets) > 0 {
 		draft.OptionalSyncTargets = append([]string(nil), request.OptionalSyncTargets...)
+	}
+
+	if canonical, ok := existingPromotedRetry(snapshot, diagnosisEnvelope, draft); ok {
+		writeJSON(w, http.StatusOK, promoteThreadResponse{
+			Status:    "duplicate",
+			WorkOrder: draft,
+			Canonical: canonical,
+			Snapshot:  snapshot,
+		})
+		return
+	}
+
+	if err := s.store.RecordPromotionPending(r.Context(), pendingRecord); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
 
 	canonical, err := s.workOrders.CreateWorkOrder(r.Context(), draft)
@@ -150,6 +161,82 @@ func (s *server) handlePromoteThread(w http.ResponseWriter, r *http.Request) {
 		Sync:      syncReceipts,
 		Snapshot:  snapshot,
 	})
+}
+
+type promotedRetryReceipt struct {
+	TrackingSystem    string `json:"tracking_system"`
+	WorkledgerProject string `json:"workledger_project"`
+	WorkOrderID       int    `json:"work_order_id"`
+	WorkOrderTitle    string `json:"work_order_title"`
+	SourceThreadID    string `json:"source_thread_id"`
+}
+
+// WO-62: a lost-response retry must reconcile to already-finalized local truth
+// before Hivebus creates a second Workledger side effect or failed pending lane.
+func existingPromotedRetry(
+	snapshot store.ThreadSnapshot,
+	diagnosisEnvelope model.Envelope,
+	draft work.Draft,
+) (WorkOrderRef, bool) {
+	hasDiagnosis := false
+	var canonical WorkOrderRef
+	for _, envelope := range snapshot.Envelopes {
+		switch envelope.Type {
+		case model.MessageTypeDiagnosisPropose:
+			if promotedDiagnosisMatchesRetry(envelope, diagnosisEnvelope) {
+				hasDiagnosis = true
+			}
+		case model.MessageTypeWorkOrderCreate:
+			if ref, ok := promotedWorkOrderMatchesRetry(envelope, draft); ok {
+				canonical = ref
+			}
+		}
+	}
+	if !hasDiagnosis || canonical.ID <= 0 {
+		return WorkOrderRef{}, false
+	}
+
+	return canonical, true
+}
+
+func promotedDiagnosisMatchesRetry(envelope model.Envelope, expected model.Envelope) bool {
+	return envelope.ThreadID == expected.ThreadID &&
+		envelope.MessageID == expected.MessageID &&
+		envelope.Type == model.MessageTypeDiagnosisPropose &&
+		envelope.Trace.Verified &&
+		envelope.Trace.PromotionStatus == model.PromotionStatusPassed &&
+		string(envelope.Payload) == string(expected.Payload)
+}
+
+func promotedWorkOrderMatchesRetry(envelope model.Envelope, draft work.Draft) (WorkOrderRef, bool) {
+	if envelope.Type != model.MessageTypeWorkOrderCreate ||
+		!envelope.Trace.Verified ||
+		envelope.Trace.PromotionStatus != model.PromotionStatusPassed {
+		return WorkOrderRef{}, false
+	}
+
+	var receipt promotedRetryReceipt
+	if err := json.Unmarshal(envelope.Payload, &receipt); err != nil {
+		return WorkOrderRef{}, false
+	}
+	if strings.TrimSpace(receipt.TrackingSystem) != "workledger" {
+		return WorkOrderRef{}, false
+	}
+	if strings.TrimSpace(receipt.WorkledgerProject) != strings.TrimSpace(draft.WorkledgerProject) {
+		return WorkOrderRef{}, false
+	}
+	if receipt.SourceThreadID != draft.SourceThreadID {
+		return WorkOrderRef{}, false
+	}
+	if receipt.WorkOrderID <= 0 || strings.TrimSpace(receipt.WorkOrderTitle) == "" {
+		return WorkOrderRef{}, false
+	}
+
+	return WorkOrderRef{
+		Project: strings.TrimSpace(receipt.WorkledgerProject),
+		ID:      receipt.WorkOrderID,
+		Title:   receipt.WorkOrderTitle,
+	}, true
 }
 
 func validatePromoteThreadRequest(request promoteThreadRequest) error {

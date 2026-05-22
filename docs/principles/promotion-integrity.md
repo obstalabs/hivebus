@@ -25,6 +25,11 @@ WO-54 draws a hard line between promotion attempts and promotion truth.
   thread. Non-Workledger execution receipts are not accepted by
   `FinalizePromotion`; they need their own explicit receipt contract rather
   than weakening the canonical Workledger handoff.
+- Retrying the same promote request after a successful finalization is a
+  duplicate no-op. Hivebus reconciles the deterministic diagnosis envelope and
+  canonical Workledger receipt already in the verified lane before it writes a
+  new pending record or calls Workledger again, so a lost client response cannot
+  create a second work order or a spurious `promotion.failed` diagnostic.
 - Operators cannot append fresh verified `diagnosis.proposed` or
   `work_order.create` envelopes with empty or `passed`
   `trace.promotion_status` through `/v0/threads/{threadID}/messages`; empty
