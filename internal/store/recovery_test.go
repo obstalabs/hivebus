@@ -512,8 +512,9 @@ func TestAppendTestEnvelopeRejectsAccidentalSinglePassedPromotionFixture(t *test
 		time.Date(2026, 4, 15, 6, 2, 0, 0, time.UTC),
 	)
 
-	if err := validateOrdinaryTestEnvelope(envelope); err == nil {
-		t.Fatal("expected ordinary test append helper to reject single promotion-passed fixture")
+	st := openTestStore(t)
+	if err := appendTestEnvelopeForTest(t, st, envelope); !errors.Is(err, errSinglePassedPromotionFixture) {
+		t.Fatalf("appendTestEnvelopeForTest() error = %v, want %v", err, errSinglePassedPromotionFixture)
 	}
 }
 
@@ -542,20 +543,26 @@ func TestDiagnosisEnvelopeDefaultsToNonPassedPromotionState(t *testing.T) {
 func appendTestEnvelope(t *testing.T, st *Store, envelope model.Envelope) {
 	t.Helper()
 
-	if err := validateOrdinaryTestEnvelope(envelope); err != nil {
+	if err := appendTestEnvelopeForTest(t, st, envelope); err != nil {
 		t.Fatalf("AppendEnvelope(%s) fixture error = %v", envelope.MessageID, err)
 	}
+}
 
+func appendTestEnvelopeForTest(t *testing.T, st *Store, envelope model.Envelope) error {
+	t.Helper()
+
+	// WO-71: keep the negative guard tied to the same append implementation
+	// used by ordinary recovery tests, not a detached validator-only path.
+	if err := validateOrdinaryTestEnvelope(envelope); err != nil {
+		return err
+	}
 	if envelope.Trace.Verified &&
 		isPromotionRecoveryEnvelopeType(envelope.Type) &&
 		envelope.Trace.PromotionStatus == "" {
-		appendLegacyPromotionEnvelopeForTest(t, st, envelope)
-		return
+		return appendLegacyPromotionEnvelopeForTest(t, st, envelope)
 	}
 
-	if err := st.AppendEnvelope(t.Context(), envelope); err != nil {
-		t.Fatalf("AppendEnvelope(%s) error = %v", envelope.MessageID, err)
-	}
+	return st.AppendEnvelope(t.Context(), envelope)
 }
 
 func validateOrdinaryTestEnvelope(envelope model.Envelope) error {
@@ -568,25 +575,23 @@ func validateOrdinaryTestEnvelope(envelope model.Envelope) error {
 	return nil
 }
 
-func appendLegacyPromotionEnvelopeForTest(t *testing.T, st *Store, envelope model.Envelope) {
+func appendLegacyPromotionEnvelopeForTest(t *testing.T, st *Store, envelope model.Envelope) error {
 	t.Helper()
 
 	// WO-66: only legacy replay fixtures bypass AppendEnvelope; authoritative
 	// passed state must go through appendAuthoritativePromotionPairForTest.
 	tx, err := st.db.BeginTx(t.Context(), nil)
 	if err != nil {
-		t.Fatalf("BeginTx() error = %v", err)
+		return err
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
 
 	if err := insertEnvelopeEventTx(t.Context(), tx, envelope); err != nil {
-		t.Fatalf("insertEnvelopeEventTx(%s) error = %v", envelope.MessageID, err)
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("Commit() error = %v", err)
-	}
+	return tx.Commit()
 }
 
 func appendAuthoritativePromotionPairForTest(
