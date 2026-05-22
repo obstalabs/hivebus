@@ -81,7 +81,12 @@ func TestBuildPromotedThreadRecoveryCapsuleUsesVerifiedProvenanceOnly(t *testing
 		Confidence:          model.ConfidenceHigh,
 		Verified:            true,
 	}
-	verifiedDiagnosis := diagnosisEnvelope(t, thread.ThreadID, diagnosis, thread.CreatedAt.Add(4*time.Minute))
+	verifiedDiagnosis := passedDiagnosisEnvelopeForFinalizeTest(
+		t,
+		thread.ThreadID,
+		diagnosis,
+		thread.CreatedAt.Add(4*time.Minute),
+	)
 	verifiedPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(5*time.Minute))
 	appendAuthoritativePromotionPairForTest(t, st, verifiedDiagnosis, verifiedPromotion)
 
@@ -244,8 +249,7 @@ func TestBuildPromotedThreadRecoveryCapsuleAcceptsLegacyPromotedEnvelopes(t *tes
 		Confidence:          model.ConfidenceHigh,
 		Verified:            true,
 	}
-	legacyDiagnosis := diagnosisEnvelope(t, thread.ThreadID, diagnosis, thread.CreatedAt.Add(time.Minute))
-	legacyDiagnosis.Trace.PromotionStatus = ""
+	legacyDiagnosis := legacyPromotedDiagnosisEnvelope(t, thread.ThreadID, diagnosis, thread.CreatedAt.Add(time.Minute))
 	appendTestEnvelope(t, st, legacyDiagnosis)
 
 	legacyPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(2*time.Minute))
@@ -278,7 +282,7 @@ func TestBuildPromotedThreadRecoveryCapsulePrefersExplicitPromotionStatusOverLeg
 		t.Fatalf("AppendThread() error = %v", err)
 	}
 
-	legacyDiagnosis := diagnosisEnvelopeWithID(
+	legacyDiagnosis := legacyPromotedDiagnosisEnvelopeWithID(
 		t,
 		thread.ThreadID,
 		model.Diagnosis{
@@ -293,7 +297,6 @@ func TestBuildPromotedThreadRecoveryCapsulePrefersExplicitPromotionStatusOverLeg
 		"idem_diagnosis_legacy",
 		thread.CreatedAt.Add(time.Minute),
 	)
-	legacyDiagnosis.Trace.PromotionStatus = ""
 	appendTestEnvelope(t, st, legacyDiagnosis)
 
 	legacyPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(2*time.Minute))
@@ -302,7 +305,7 @@ func TestBuildPromotedThreadRecoveryCapsulePrefersExplicitPromotionStatusOverLeg
 	legacyPromotion.Trace.PromotionStatus = ""
 	appendTestEnvelope(t, st, legacyPromotion)
 
-	explicitDiagnosis := diagnosisEnvelopeWithID(
+	explicitDiagnosis := passedDiagnosisEnvelopeWithIDForFinalizeTest(
 		t,
 		thread.ThreadID,
 		model.Diagnosis{
@@ -362,7 +365,7 @@ func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForUnverifiedExpli
 		t.Fatalf("AppendThread() error = %v", err)
 	}
 
-	legacyDiagnosis := diagnosisEnvelopeWithID(
+	legacyDiagnosis := legacyPromotedDiagnosisEnvelopeWithID(
 		t,
 		thread.ThreadID,
 		model.Diagnosis{
@@ -377,7 +380,6 @@ func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForUnverifiedExpli
 		"idem_diagnosis_legacy_unverified",
 		thread.CreatedAt.Add(time.Minute),
 	)
-	legacyDiagnosis.Trace.PromotionStatus = ""
 	appendTestEnvelope(t, st, legacyDiagnosis)
 
 	legacyPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(2*time.Minute))
@@ -386,7 +388,7 @@ func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForUnverifiedExpli
 	legacyPromotion.Trace.PromotionStatus = ""
 	appendTestEnvelope(t, st, legacyPromotion)
 
-	unverifiedPassedDiagnosis := diagnosisEnvelopeWithID(
+	unverifiedPassedDiagnosis := passedDiagnosisEnvelopeWithIDForFinalizeTest(
 		t,
 		thread.ThreadID,
 		model.Diagnosis{
@@ -430,7 +432,7 @@ func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForFailedOrPending
 		t.Fatalf("AppendThread() error = %v", err)
 	}
 
-	legacyDiagnosis := diagnosisEnvelopeWithID(
+	legacyDiagnosis := legacyPromotedDiagnosisEnvelopeWithID(
 		t,
 		thread.ThreadID,
 		model.Diagnosis{
@@ -445,7 +447,6 @@ func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForFailedOrPending
 		"idem_diagnosis_legacy_failed",
 		thread.CreatedAt.Add(time.Minute),
 	)
-	legacyDiagnosis.Trace.PromotionStatus = ""
 	appendTestEnvelope(t, st, legacyDiagnosis)
 
 	legacyPromotion := workOrderEnvelope(thread.ThreadID, thread.CreatedAt.Add(2*time.Minute))
@@ -497,7 +498,7 @@ func TestBuildPromotedThreadRecoveryCapsuleKeepsLegacyFallbackForFailedOrPending
 func TestAppendTestEnvelopeRejectsAccidentalSinglePassedPromotionFixture(t *testing.T) {
 	t.Helper()
 
-	envelope := diagnosisEnvelope(
+	envelope := passedDiagnosisEnvelopeForFinalizeTest(
 		t,
 		"thr_123",
 		model.Diagnosis{
@@ -513,6 +514,28 @@ func TestAppendTestEnvelopeRejectsAccidentalSinglePassedPromotionFixture(t *test
 
 	if err := validateOrdinaryTestEnvelope(envelope); err == nil {
 		t.Fatal("expected ordinary test append helper to reject single promotion-passed fixture")
+	}
+}
+
+func TestDiagnosisEnvelopeDefaultsToNonPassedPromotionState(t *testing.T) {
+	t.Helper()
+
+	envelope := diagnosisEnvelope(
+		t,
+		"thr_123",
+		model.Diagnosis{
+			Problem:             "Ordinary fixture.",
+			LikelyCause:         "Generic helpers should not mint authoritative promotion truth.",
+			ProposedRemediation: []string{"Use passedDiagnosisEnvelopeForFinalizeTest for finalization."},
+			EvidenceIDs:         []string{"art_smoke_log"},
+			Confidence:          model.ConfidenceHigh,
+			Verified:            true,
+		},
+		time.Date(2026, 4, 15, 6, 2, 0, 0, time.UTC),
+	)
+
+	if envelope.Trace.PromotionStatus == model.PromotionStatusPassed {
+		t.Fatal("ordinary diagnosis fixture must not default to promotion_status=passed")
 	}
 }
 
@@ -628,6 +651,8 @@ func diagnosisEnvelopeWithID(
 	t.Helper()
 
 	payload := marshalJSONForTest(t, diagnosis)
+	// WO-70: ordinary diagnosis fixtures stay non-authoritative; passed
+	// promotion state must use passedDiagnosisEnvelopeForFinalizeTest.
 	return model.Envelope{
 		MessageID:      messageID,
 		ThreadID:       threadID,
@@ -640,13 +665,41 @@ func diagnosisEnvelopeWithID(
 		Trace: model.Trace{
 			CorrelationID:   threadID,
 			Verified:        true,
-			PromotionStatus: model.PromotionStatusPassed,
+			PromotionStatus: model.PromotionStatusPending,
 		},
 		Security: model.Security{
 			Scheme: "ed25519",
 			Nonce:  "nonce_" + messageID,
 		},
 	}
+}
+
+func passedDiagnosisEnvelopeForFinalizeTest(
+	t *testing.T,
+	threadID string,
+	diagnosis model.Diagnosis,
+	at time.Time,
+) model.Envelope {
+	t.Helper()
+
+	return passedDiagnosisEnvelopeWithIDForFinalizeTest(t, threadID, diagnosis, "msg_diagnosis", "idem_diagnosis", at)
+}
+
+func passedDiagnosisEnvelopeWithIDForFinalizeTest(
+	t *testing.T,
+	threadID string,
+	diagnosis model.Diagnosis,
+	messageID string,
+	idempotencyKey string,
+	at time.Time,
+) model.Envelope {
+	t.Helper()
+
+	// WO-70: this deliberately named helper is the only recovery-test path for
+	// constructing promotion-passed diagnosis fixtures before FinalizePromotion.
+	envelope := diagnosisEnvelopeWithID(t, threadID, diagnosis, messageID, idempotencyKey, at)
+	envelope.Trace.PromotionStatus = model.PromotionStatusPassed
+	return envelope
 }
 
 func legacyPromotedDiagnosisEnvelope(
