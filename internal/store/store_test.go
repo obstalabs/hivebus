@@ -560,6 +560,12 @@ func TestFinalizePromotionRejectsWorkOrderWithoutCanonicalWorkledgerFields(t *te
 				return json.RawMessage(`{"tracking_system":"other","workledger_project":"hivebus","work_order_id":65,"work_order_title":"FinalizePromotion must require canonical Workledger receipt fields","source_thread_id":"` + threadID + `","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`)
 			},
 		},
+		{
+			name: "trim only source thread id",
+			payload: func(threadID string) json.RawMessage {
+				return json.RawMessage(`{"tracking_system":"workledger","workledger_project":"hivebus","work_order_id":65,"work_order_title":"FinalizePromotion must require canonical Workledger receipt fields","source_thread_id":" ` + threadID + ` ","optional_sync_targets":["hiveram.com"],"confidence":"high","evidence_ids":["art_smoke_log"]}`)
+			},
+		},
 	}
 
 	for _, tt := range tests {

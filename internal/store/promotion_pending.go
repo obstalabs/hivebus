@@ -230,8 +230,9 @@ func validateFinalizedDiagnosisPayload(envelope model.Envelope) error {
 	return nil
 }
 
-// WO-65/WO-67: the work-order receipt must point back at this exact thread and
-// name the canonical Workledger WO before recovery can treat it as authoritative.
+// WO-65/WO-67/WO-69: the work-order receipt must point back at this
+// exact thread and name the canonical Workledger WO before recovery can treat
+// it as authoritative.
 func validateFinalizedWorkOrderPayload(threadID string, envelope model.Envelope) error {
 	var payload promotedWorkOrderPayload
 	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -257,7 +258,7 @@ func validateFinalizedWorkOrderPayload(threadID string, envelope model.Envelope)
 	if strings.TrimSpace(payload.SourceThreadID) == "" {
 		return errors.New("verified promotion work_order.create source_thread_id is required")
 	}
-	if strings.TrimSpace(payload.SourceThreadID) != threadID {
+	if payload.SourceThreadID != threadID {
 		return errors.New("verified promotion work_order.create source_thread_id does not match thread")
 	}
 
