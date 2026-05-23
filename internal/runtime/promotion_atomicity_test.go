@@ -305,6 +305,102 @@ func TestPromoteThreadRetryUsesExistingVerifiedPromotionWithoutBridge(t *testing
 	}
 }
 
+func TestPromoteThreadRetryUsesLegacyReceiptWhenUnambiguous(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	bridge := &fakeWorkOrderBridge{err: errors.New("bridge should not be called")}
+	handler := NewHandlerWithOptions(
+		st,
+		openTestArtifactStore(t),
+		keys,
+		HandlerOptions{WorkOrders: bridge},
+	)
+
+	thread := sampleThread()
+	thread.Status = model.ThreadStatusReadyForWork
+	mustSeedThread(t, st, thread)
+
+	request := validPromoteThreadRequestForRetryTest()
+	canonical := WorkOrderRef{
+		Project: "neurorouter-pro",
+		ID:      701,
+		Title:   "Resolve: Clawbot smoke lane is unstable",
+	}
+	seedSuccessfulPromotionWithReceiptMutationForRetryTest(t, st, thread, request, canonical, "", func(receipt *promotedRetryReceipt) {
+		receipt.DiagnosisMessageID = ""
+		receipt.DiagnosisPayloadSHA256 = ""
+	})
+
+	status, resp, raw := postPromoteForRetryTest(t, handler, thread.ThreadID, marshalJSON(t, request))
+	if status != http.StatusOK {
+		t.Fatalf("retry promote status = %d, body = %s", status, raw)
+	}
+	if resp.Status != "duplicate" {
+		t.Fatalf("expected duplicate retry status, got %#v", resp)
+	}
+	if resp.Canonical.ID != canonical.ID {
+		t.Fatalf("expected existing legacy canonical work order, got %#v", resp.Canonical)
+	}
+	if len(bridge.drafts) != 0 {
+		t.Fatalf("expected no workledger side effect on unambiguous legacy retry, got %d", len(bridge.drafts))
+	}
+}
+
+// WO-74: legacy receipts have no diagnosis binding fields, so ambiguity must
+// fail closed instead of choosing an arbitrary finalized Workledger receipt.
+func TestPromoteThreadRetryRejectsAmbiguousLegacyReceipts(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	thread := sampleThread()
+	thread.Status = model.ThreadStatusReadyForWork
+	mustSeedThread(t, st, thread)
+
+	request := validPromoteThreadRequestForRetryTest()
+	seedSuccessfulPromotionWithReceiptMutationForRetryTest(t, st, thread, request, WorkOrderRef{
+		Project: "neurorouter-pro",
+		ID:      701,
+		Title:   "Resolve: Clawbot smoke lane is unstable",
+	}, "", func(receipt *promotedRetryReceipt) {
+		receipt.DiagnosisMessageID = ""
+		receipt.DiagnosisPayloadSHA256 = ""
+	})
+
+	staleRequest := validPromoteThreadRequestForRetryTest()
+	staleRequest.OptionalSyncTargets = []string{"hiveram.com"}
+	staleRequest.Diagnosis.Problem = "Clawbot smoke lane investigation drifted to stale evidence."
+	staleRequest.Diagnosis.EvidenceIDs = []string{"art_stale_log"}
+	staleRequest.Diagnosis.Confidence = model.ConfidenceMedium
+	seedSuccessfulPromotionWithReceiptMutationForRetryTest(t, st, thread, staleRequest, WorkOrderRef{
+		Project: "neurorouter-pro",
+		ID:      999,
+		Title:   "Resolve: Clawbot smoke lane is unstable",
+	}, "stale", func(receipt *promotedRetryReceipt) {
+		receipt.DiagnosisMessageID = ""
+		receipt.DiagnosisPayloadSHA256 = ""
+	})
+
+	snapshot, err := st.LoadThread(t.Context(), thread.ThreadID)
+	if err != nil {
+		t.Fatalf("LoadThread() error = %v", err)
+	}
+	at := time.Date(2026, 4, 18, 7, 0, 0, 0, time.UTC)
+	diagnosisEnvelope, err := buildDiagnosisEnvelope(thread.ThreadID, request, at)
+	if err != nil {
+		t.Fatalf("buildDiagnosisEnvelope() error = %v", err)
+	}
+	draft, err := work.DraftFromThread(request.WorkledgerProject, thread, request.Diagnosis)
+	if err != nil {
+		t.Fatalf("DraftFromThread() error = %v", err)
+	}
+
+	if ref, ok := existingPromotedRetry(snapshot, diagnosisEnvelope, draft); ok {
+		t.Fatalf("expected ambiguous legacy retry to fail closed, got %#v", ref)
+	}
+}
+
 // WO-72: when several receipts exist, retry reconciliation must choose the
 // receipt bound to the retried diagnosis instead of the nearest thread receipt.
 func TestPromoteThreadRetryUsesReceiptBoundToMatchingDiagnosis(t *testing.T) {
@@ -526,6 +622,28 @@ func seedSuccessfulPromotionWithWorkOrderSuffixForRetryTest(
 ) store.PromotionPendingRecord {
 	t.Helper()
 
+	return seedSuccessfulPromotionWithReceiptMutationForRetryTest(
+		t,
+		st,
+		thread,
+		request,
+		canonical,
+		workOrderSuffix,
+		nil,
+	)
+}
+
+func seedSuccessfulPromotionWithReceiptMutationForRetryTest(
+	t *testing.T,
+	st *store.Store,
+	thread model.Thread,
+	request promoteThreadRequest,
+	canonical WorkOrderRef,
+	workOrderSuffix string,
+	mutate func(*promotedRetryReceipt),
+) store.PromotionPendingRecord {
+	t.Helper()
+
 	at := time.Date(2026, 4, 18, 7, 0, 0, 0, time.UTC)
 	draft, err := work.DraftFromThread(request.WorkledgerProject, thread, request.Diagnosis)
 	if err != nil {
@@ -544,6 +662,9 @@ func seedSuccessfulPromotionWithWorkOrderSuffixForRetryTest(
 	workOrderEnvelope, err := buildWorkOrderEnvelope(thread.ThreadID, request, draft, canonical, at.Add(time.Second))
 	if err != nil {
 		t.Fatalf("buildWorkOrderEnvelope() error = %v", err)
+	}
+	if mutate != nil {
+		workOrderEnvelope = mutatePromotedRetryReceiptForTest(t, workOrderEnvelope, mutate)
 	}
 	if workOrderSuffix != "" {
 		workOrderEnvelope.MessageID += "_" + workOrderSuffix

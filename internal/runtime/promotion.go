@@ -202,10 +202,81 @@ func existingPromotedRetry(
 		}
 	}
 	if !hasDiagnosis || canonical.ID <= 0 {
+		return existingLegacyPromotedRetry(snapshot, diagnosisEnvelope, draft)
+	}
+
+	return canonical, true
+}
+
+// WO-74: pre-WO-72 receipts did not carry diagnosis binding fields, so they
+// may satisfy a duplicate retry only when the whole finalized thread is
+// unambiguous. Multi-diagnosis or multi-receipt legacy threads fail closed.
+func existingLegacyPromotedRetry(
+	snapshot store.ThreadSnapshot,
+	diagnosisEnvelope model.Envelope,
+	draft work.Draft,
+) (WorkOrderRef, bool) {
+	validDiagnosisCount := 0
+	hasExactDiagnosis := false
+	validReceiptCount := 0
+	var canonical WorkOrderRef
+
+	for _, envelope := range snapshot.Envelopes {
+		switch envelope.Type {
+		case model.MessageTypeDiagnosisPropose:
+			if !legacyPromotedDiagnosisCandidate(envelope) {
+				continue
+			}
+			validDiagnosisCount++
+			if promotedDiagnosisMatchesRetry(envelope, diagnosisEnvelope) {
+				hasExactDiagnosis = true
+			}
+		case model.MessageTypeWorkOrderCreate:
+			receipt, ok := promotedWorkOrderCandidate(envelope, draft)
+			if !ok {
+				continue
+			}
+			validReceiptCount++
+			if receipt.DiagnosisMessageID == "" &&
+				receipt.DiagnosisPayloadSHA256 == "" &&
+				promotedRetryReceiptMatchesDraft(receipt, draft) {
+				canonical = WorkOrderRef{
+					Project: strings.TrimSpace(receipt.WorkledgerProject),
+					ID:      receipt.WorkOrderID,
+					Title:   receipt.WorkOrderTitle,
+				}
+			}
+		}
+	}
+
+	if validDiagnosisCount != 1 ||
+		!hasExactDiagnosis ||
+		validReceiptCount != 1 ||
+		canonical.ID <= 0 {
 		return WorkOrderRef{}, false
 	}
 
 	return canonical, true
+}
+
+// WO-74: legacy fallback counts only semantically valid promotion-passed
+// diagnoses, then requires exactly one candidate before trusting the retry.
+func legacyPromotedDiagnosisCandidate(envelope model.Envelope) bool {
+	if envelope.Type != model.MessageTypeDiagnosisPropose ||
+		!envelope.Trace.Verified ||
+		envelope.Trace.PromotionStatus != model.PromotionStatusPassed {
+		return false
+	}
+
+	var diagnosis model.Diagnosis
+	if err := json.Unmarshal(envelope.Payload, &diagnosis); err != nil {
+		return false
+	}
+	if err := diagnosis.Validate(); err != nil {
+		return false
+	}
+
+	return diagnosis.Verified && len(diagnosis.MissingInfo) == 0
 }
 
 func promotedDiagnosisMatchesRetry(envelope model.Envelope, expected model.Envelope) bool {
@@ -232,21 +303,7 @@ func promotedWorkOrderMatchesRetry(
 	if err := json.Unmarshal(envelope.Payload, &receipt); err != nil {
 		return WorkOrderRef{}, false
 	}
-	if strings.TrimSpace(receipt.TrackingSystem) != "workledger" {
-		return WorkOrderRef{}, false
-	}
-	if strings.TrimSpace(receipt.WorkledgerProject) != strings.TrimSpace(draft.WorkledgerProject) {
-		return WorkOrderRef{}, false
-	}
-	if receipt.SourceThreadID != draft.SourceThreadID {
-		return WorkOrderRef{}, false
-	}
-	if receipt.WorkOrderID <= 0 || strings.TrimSpace(receipt.WorkOrderTitle) != strings.TrimSpace(draft.Title) {
-		return WorkOrderRef{}, false
-	}
-	if receipt.Confidence != draft.Confidence ||
-		!slices.Equal(receipt.EvidenceIDs, draft.EvidenceIDs) ||
-		!slices.Equal(receipt.OptionalSyncTargets, draft.OptionalSyncTargets) {
+	if !promotedRetryReceiptMatchesDraft(receipt, draft) {
 		return WorkOrderRef{}, false
 	}
 	if receipt.DiagnosisMessageID != diagnosisEnvelope.MessageID ||
@@ -259,6 +316,56 @@ func promotedWorkOrderMatchesRetry(
 		ID:      receipt.WorkOrderID,
 		Title:   receipt.WorkOrderTitle,
 	}, true
+}
+
+// WO-74: count every valid Workledger receipt for the thread/project so a
+// mixed legacy/new or multi-receipt lane cannot choose an old receipt.
+func promotedWorkOrderCandidate(
+	envelope model.Envelope,
+	draft work.Draft,
+) (promotedRetryReceipt, bool) {
+	if envelope.Type != model.MessageTypeWorkOrderCreate ||
+		!envelope.Trace.Verified ||
+		envelope.Trace.PromotionStatus != model.PromotionStatusPassed {
+		return promotedRetryReceipt{}, false
+	}
+
+	var receipt promotedRetryReceipt
+	if err := json.Unmarshal(envelope.Payload, &receipt); err != nil {
+		return promotedRetryReceipt{}, false
+	}
+	if strings.TrimSpace(receipt.TrackingSystem) != "workledger" {
+		return promotedRetryReceipt{}, false
+	}
+	if strings.TrimSpace(receipt.WorkledgerProject) != strings.TrimSpace(draft.WorkledgerProject) {
+		return promotedRetryReceipt{}, false
+	}
+	if receipt.SourceThreadID != draft.SourceThreadID {
+		return promotedRetryReceipt{}, false
+	}
+	if receipt.WorkOrderID <= 0 || strings.TrimSpace(receipt.WorkOrderTitle) == "" {
+		return promotedRetryReceipt{}, false
+	}
+
+	return receipt, true
+}
+
+func promotedRetryReceiptMatchesDraft(receipt promotedRetryReceipt, draft work.Draft) bool {
+	if strings.TrimSpace(receipt.TrackingSystem) != "workledger" {
+		return false
+	}
+	if strings.TrimSpace(receipt.WorkledgerProject) != strings.TrimSpace(draft.WorkledgerProject) {
+		return false
+	}
+	if receipt.SourceThreadID != draft.SourceThreadID {
+		return false
+	}
+	if receipt.WorkOrderID <= 0 || strings.TrimSpace(receipt.WorkOrderTitle) != strings.TrimSpace(draft.Title) {
+		return false
+	}
+	return receipt.Confidence == draft.Confidence &&
+		slices.Equal(receipt.EvidenceIDs, draft.EvidenceIDs) &&
+		slices.Equal(receipt.OptionalSyncTargets, draft.OptionalSyncTargets)
 }
 
 func validatePromoteThreadRequest(request promoteThreadRequest) error {

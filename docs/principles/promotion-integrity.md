@@ -34,6 +34,14 @@ WO-54 draws a hard line between promotion attempts and promotion truth.
   payload hash, evidence IDs, confidence, optional sync targets, title,
   thread, and Workledger project; a nearby receipt from the same thread is not
   enough.
+- WO-74 keeps a bounded compatibility window for finalized receipts created
+  before the diagnosis message ID and payload hash fields existed. That legacy
+  duplicate no-op path is allowed only when the verified lane contains exactly
+  one semantically valid promotion-passed diagnosis and exactly one
+  semantically valid legacy Workledger receipt for the same thread/project. If
+  there are multiple valid diagnoses, multiple legacy receipts, partial binding
+  fields, malformed payloads, or any mismatch against the retry draft, Hivebus
+  fails closed and does not infer a canonical work order.
 - Operators cannot append fresh verified `diagnosis.proposed` or
   `work_order.create` envelopes with empty or `passed`
   `trace.promotion_status` through `/v0/threads/{threadID}/messages`; empty
