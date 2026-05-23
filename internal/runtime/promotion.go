@@ -218,7 +218,7 @@ func existingLegacyPromotedRetry(
 ) (WorkOrderRef, bool) {
 	validDiagnosisCount := 0
 	hasExactDiagnosis := false
-	validReceiptCount := 0
+	receiptCount := 0
 	var canonical WorkOrderRef
 
 	for _, envelope := range snapshot.Envelopes {
@@ -232,11 +232,14 @@ func existingLegacyPromotedRetry(
 				hasExactDiagnosis = true
 			}
 		case model.MessageTypeWorkOrderCreate:
-			receipt, ok := promotedWorkOrderCandidate(envelope, draft)
-			if !ok {
+			receipt, relevant, valid := promotedWorkOrderCandidate(envelope, draft)
+			if !relevant {
 				continue
 			}
-			validReceiptCount++
+			receiptCount++
+			if !valid {
+				continue
+			}
 			if receipt.DiagnosisMessageID == "" &&
 				receipt.DiagnosisPayloadSHA256 == "" &&
 				promotedRetryReceiptMatchesDraft(receipt, draft) {
@@ -251,7 +254,7 @@ func existingLegacyPromotedRetry(
 
 	if validDiagnosisCount != 1 ||
 		!hasExactDiagnosis ||
-		validReceiptCount != 1 ||
+		receiptCount != 1 ||
 		canonical.ID <= 0 {
 		return WorkOrderRef{}, false
 	}
@@ -318,36 +321,40 @@ func promotedWorkOrderMatchesRetry(
 	}, true
 }
 
-// WO-74: count every valid Workledger receipt for the thread/project so a
-// mixed legacy/new or multi-receipt lane cannot choose an old receipt.
+// WO-74/WO-77: count every promotion-passed Workledger receipt-shaped fact for
+// the thread/project. Malformed or mismatched receipts make the legacy lane
+// ambiguous instead of disappearing from fallback accounting.
 func promotedWorkOrderCandidate(
 	envelope model.Envelope,
 	draft work.Draft,
-) (promotedRetryReceipt, bool) {
+) (promotedRetryReceipt, bool, bool) {
 	if envelope.Type != model.MessageTypeWorkOrderCreate ||
 		!envelope.Trace.Verified ||
 		envelope.Trace.PromotionStatus != model.PromotionStatusPassed {
-		return promotedRetryReceipt{}, false
+		return promotedRetryReceipt{}, false, false
+	}
+	if envelope.ThreadID != draft.SourceThreadID {
+		return promotedRetryReceipt{}, true, false
 	}
 
 	var receipt promotedRetryReceipt
 	if err := json.Unmarshal(envelope.Payload, &receipt); err != nil {
-		return promotedRetryReceipt{}, false
+		return promotedRetryReceipt{}, true, false
 	}
 	if strings.TrimSpace(receipt.TrackingSystem) != "workledger" {
-		return promotedRetryReceipt{}, false
+		return receipt, true, false
 	}
 	if strings.TrimSpace(receipt.WorkledgerProject) != strings.TrimSpace(draft.WorkledgerProject) {
-		return promotedRetryReceipt{}, false
+		return receipt, true, false
 	}
 	if receipt.SourceThreadID != draft.SourceThreadID {
-		return promotedRetryReceipt{}, false
+		return receipt, true, false
 	}
 	if receipt.WorkOrderID <= 0 || strings.TrimSpace(receipt.WorkOrderTitle) == "" {
-		return promotedRetryReceipt{}, false
+		return receipt, true, false
 	}
 
-	return receipt, true
+	return receipt, true, true
 }
 
 func promotedRetryReceiptMatchesDraft(receipt promotedRetryReceipt, draft work.Draft) bool {

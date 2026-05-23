@@ -401,6 +401,94 @@ func TestPromoteThreadRetryRejectsAmbiguousLegacyReceipts(t *testing.T) {
 	}
 }
 
+// WO-77: malformed passed work-order receipts must make legacy retry recovery
+// fail closed instead of being skipped as invisible noise.
+func TestPromoteThreadRetryRejectsMalformedLegacyReceipt(t *testing.T) {
+	t.Helper()
+
+	thread := sampleThread()
+	thread.Status = model.ThreadStatusReadyForWork
+	request := validPromoteThreadRequestForRetryTest()
+	at := time.Date(2026, 4, 18, 7, 0, 0, 0, time.UTC)
+
+	draft, err := work.DraftFromThread(request.WorkledgerProject, thread, request.Diagnosis)
+	if err != nil {
+		t.Fatalf("DraftFromThread() error = %v", err)
+	}
+	diagnosisEnvelope, err := buildDiagnosisEnvelope(thread.ThreadID, request, at)
+	if err != nil {
+		t.Fatalf("buildDiagnosisEnvelope() error = %v", err)
+	}
+	workOrderEnvelope, err := buildWorkOrderEnvelope(thread.ThreadID, request, draft, WorkOrderRef{
+		Project: "neurorouter-pro",
+		ID:      702,
+		Title:   "Resolve: Clawbot smoke lane is unstable",
+	}, at.Add(time.Second))
+	if err != nil {
+		t.Fatalf("buildWorkOrderEnvelope() error = %v", err)
+	}
+	legacyReceipt := mutatePromotedRetryReceiptForTest(t, workOrderEnvelope, func(receipt *promotedRetryReceipt) {
+		receipt.DiagnosisMessageID = ""
+		receipt.DiagnosisPayloadSHA256 = ""
+	})
+	malformedReceipt := suffixPromotionEnvelopeForRetryTest(workOrderEnvelope, "malformed")
+	malformedReceipt.Payload = json.RawMessage(`{"tracking_system":`)
+
+	snapshot := store.ThreadSnapshot{
+		Thread:    thread,
+		Envelopes: []model.Envelope{diagnosisEnvelope, legacyReceipt, malformedReceipt},
+	}
+	if ref, ok := existingPromotedRetry(snapshot, diagnosisEnvelope, draft); ok {
+		t.Fatalf("expected malformed legacy receipt to fail closed, got %#v", ref)
+	}
+}
+
+// WO-77: partial diagnosis binding is neither a strict receipt nor a legacy
+// receipt, so it must make the legacy lane ambiguous when present.
+func TestPromoteThreadRetryRejectsPartialBindingLegacyReceipt(t *testing.T) {
+	t.Helper()
+
+	thread := sampleThread()
+	thread.Status = model.ThreadStatusReadyForWork
+	request := validPromoteThreadRequestForRetryTest()
+	at := time.Date(2026, 4, 18, 7, 0, 0, 0, time.UTC)
+
+	draft, err := work.DraftFromThread(request.WorkledgerProject, thread, request.Diagnosis)
+	if err != nil {
+		t.Fatalf("DraftFromThread() error = %v", err)
+	}
+	diagnosisEnvelope, err := buildDiagnosisEnvelope(thread.ThreadID, request, at)
+	if err != nil {
+		t.Fatalf("buildDiagnosisEnvelope() error = %v", err)
+	}
+	workOrderEnvelope, err := buildWorkOrderEnvelope(thread.ThreadID, request, draft, WorkOrderRef{
+		Project: "neurorouter-pro",
+		ID:      703,
+		Title:   "Resolve: Clawbot smoke lane is unstable",
+	}, at.Add(time.Second))
+	if err != nil {
+		t.Fatalf("buildWorkOrderEnvelope() error = %v", err)
+	}
+	legacyReceipt := mutatePromotedRetryReceiptForTest(t, workOrderEnvelope, func(receipt *promotedRetryReceipt) {
+		receipt.DiagnosisMessageID = ""
+		receipt.DiagnosisPayloadSHA256 = ""
+	})
+	partialReceipt := suffixPromotionEnvelopeForRetryTest(
+		mutatePromotedRetryReceiptForTest(t, workOrderEnvelope, func(receipt *promotedRetryReceipt) {
+			receipt.DiagnosisPayloadSHA256 = ""
+		}),
+		"partial",
+	)
+
+	snapshot := store.ThreadSnapshot{
+		Thread:    thread,
+		Envelopes: []model.Envelope{diagnosisEnvelope, legacyReceipt, partialReceipt},
+	}
+	if ref, ok := existingPromotedRetry(snapshot, diagnosisEnvelope, draft); ok {
+		t.Fatalf("expected partial binding receipt to fail closed, got %#v", ref)
+	}
+}
+
 // WO-72: when several receipts exist, retry reconciliation must choose the
 // receipt bound to the retried diagnosis instead of the nearest thread receipt.
 func TestPromoteThreadRetryUsesReceiptBoundToMatchingDiagnosis(t *testing.T) {
@@ -703,6 +791,16 @@ func mutatePromotedRetryReceiptForTest(
 		t.Fatalf("Marshal(receipt) error = %v", err)
 	}
 	envelope.Payload = payload
+	return envelope
+}
+
+// WO-77: bad legacy-lane fixtures need unique envelope identity without
+// changing the promotion receipt payload under test.
+func suffixPromotionEnvelopeForRetryTest(envelope model.Envelope, suffix string) model.Envelope {
+	envelope.MessageID += "_" + suffix
+	envelope.IdempotencyKey += "_" + suffix
+	envelope.Security.Nonce += "_" + suffix
+	envelope.Security.Signature += "_" + suffix
 	return envelope
 }
 
