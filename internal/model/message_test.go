@@ -181,10 +181,19 @@ func TestEnvelopeValidateRejectsIncoherentRouting(t *testing.T) {
 		{
 			name: "broadcast recipient",
 			mutate: func(envelope *Envelope) {
+				envelope.To = nil
 				envelope.Scope = ScopeBroadcast
 				envelope.Recipient = "agent.worker"
 			},
 			want: "recipient must be empty",
+		},
+		{
+			name: "broadcast legacy to",
+			mutate: func(envelope *Envelope) {
+				envelope.Scope = ScopeBroadcast
+				envelope.Recipient = ""
+			},
+			want: "to must be empty",
 		},
 		{
 			name: "targeted missing recipient",
@@ -192,6 +201,20 @@ func TestEnvelopeValidateRejectsIncoherentRouting(t *testing.T) {
 				envelope.Recipient = ""
 			},
 			want: "recipient is required",
+		},
+		{
+			name: "targeted recipient mismatch",
+			mutate: func(envelope *Envelope) {
+				envelope.To = []string{"agent.other"}
+			},
+			want: "to recipient must match recipient",
+		},
+		{
+			name: "targeted multiple legacy recipients",
+			mutate: func(envelope *Envelope) {
+				envelope.To = []string{"agent.worker", "agent.backup"}
+			},
+			want: "to must contain exactly one recipient",
 		},
 		{
 			name: "reply target missing",
@@ -208,6 +231,38 @@ func TestEnvelopeValidateRejectsIncoherentRouting(t *testing.T) {
 			want: "reply_target is only allowed",
 		},
 		{
+			name: "collection none without reply policy",
+			mutate: func(envelope *Envelope) {
+				envelope.ReplyPolicy = ""
+				envelope.CollectionPolicy = CollectionPolicyNone
+			},
+			want: "collection_policy is only allowed",
+		},
+		{
+			name: "collection none with reply none",
+			mutate: func(envelope *Envelope) {
+				envelope.ReplyPolicy = ReplyPolicyNone
+				envelope.CollectionPolicy = CollectionPolicyNone
+			},
+			want: "collection_policy is only allowed",
+		},
+		{
+			name: "collection none with reply to sender",
+			mutate: func(envelope *Envelope) {
+				envelope.CollectionPolicy = CollectionPolicyNone
+			},
+			want: "collection_policy is only allowed",
+		},
+		{
+			name: "collection none with reply to target",
+			mutate: func(envelope *Envelope) {
+				envelope.ReplyPolicy = ReplyPolicyReplyToTarget
+				envelope.ReplyTarget = "agent.owner"
+				envelope.CollectionPolicy = CollectionPolicyNone
+			},
+			want: "collection_policy is only allowed",
+		},
+		{
 			name: "collection policy without collect",
 			mutate: func(envelope *Envelope) {
 				envelope.CollectionPolicy = CollectionPolicyAllUntilTimeout
@@ -218,6 +273,14 @@ func TestEnvelopeValidateRejectsIncoherentRouting(t *testing.T) {
 			name: "collect missing collection policy",
 			mutate: func(envelope *Envelope) {
 				envelope.ReplyPolicy = ReplyPolicyCollect
+			},
+			want: "collection_policy is required",
+		},
+		{
+			name: "collect none collection policy",
+			mutate: func(envelope *Envelope) {
+				envelope.ReplyPolicy = ReplyPolicyCollect
+				envelope.CollectionPolicy = CollectionPolicyNone
 			},
 			want: "collection_policy is required",
 		},
@@ -263,6 +326,42 @@ func TestEnvelopeValidateAcceptsBroadcastCollectWithoutLegacyRecipients(t *testi
 	envelope.Recipient = ""
 	envelope.ReplyPolicy = ReplyPolicyCollect
 	envelope.CollectionPolicy = CollectionPolicyAllUntilTimeout
+
+	if err := envelope.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestEnvelopeValidateAcceptsCollectionModes(t *testing.T) {
+	t.Helper()
+
+	for _, policy := range []CollectionPolicy{
+		CollectionPolicyFirst,
+		CollectionPolicyAllUntilTimeout,
+		CollectionPolicyQuorum,
+		CollectionPolicyManualReview,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			envelope := validRoutingEnvelope()
+			envelope.To = nil
+			envelope.Scope = ScopeBroadcast
+			envelope.Recipient = ""
+			envelope.ReplyPolicy = ReplyPolicyCollect
+			envelope.CollectionPolicy = policy
+
+			if err := envelope.Validate(); err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestEnvelopeValidateAcceptsRecipientWithoutScope(t *testing.T) {
+	t.Helper()
+
+	envelope := validRoutingEnvelope()
+	envelope.To = nil
+	envelope.Scope = ""
 
 	if err := envelope.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)

@@ -336,12 +336,23 @@ func (e Envelope) validateRouting(requireOffbandSignature bool) error {
 
 	switch e.Scope {
 	case ScopeBroadcast:
+		// WO-92: broadcast scope cannot also carry legacy direct recipients.
+		if len(e.To) > 0 {
+			return errors.New("to must be empty when scope is broadcast")
+		}
 		if strings.TrimSpace(e.Recipient) != "" {
 			return errors.New("recipient must be empty when scope is broadcast")
 		}
 	case ScopeTargeted:
 		if strings.TrimSpace(e.Recipient) == "" {
 			return errors.New("recipient is required when scope is targeted")
+		}
+		// WO-92: legacy routing may only mirror the canonical targeted recipient.
+		if len(e.To) > 1 {
+			return errors.New("to must contain exactly one recipient when scope is targeted")
+		}
+		if len(e.To) == 1 && strings.TrimSpace(e.To[0]) != strings.TrimSpace(e.Recipient) {
+			return errors.New("to recipient must match recipient when scope is targeted")
 		}
 	}
 
@@ -357,7 +368,8 @@ func (e Envelope) validateRouting(requireOffbandSignature bool) error {
 		if e.CollectionPolicy == "" || e.CollectionPolicy == CollectionPolicyNone {
 			return errors.New("collection_policy is required when reply_policy is collect")
 		}
-	} else if e.CollectionPolicy != "" && e.CollectionPolicy != CollectionPolicyNone {
+	} else if e.CollectionPolicy != "" {
+		// WO-93: explicit "none" outside collect is ambiguous with omitted policy.
 		return errors.New("collection_policy is only allowed when reply_policy is collect")
 	}
 
