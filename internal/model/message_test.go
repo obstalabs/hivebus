@@ -210,6 +210,15 @@ func TestEnvelopeValidateRejectsIncoherentRouting(t *testing.T) {
 			want: "to recipient must match recipient",
 		},
 		{
+			// WO-92: a padded recipient diverges from the routed (trimmed) value even
+			// though the legacy "to" matches after trimming — reject the non-canonical form.
+			name: "targeted recipient whitespace",
+			mutate: func(envelope *Envelope) {
+				envelope.Recipient = " agent.worker "
+			},
+			want: "recipient must not have leading or trailing whitespace",
+		},
+		{
 			name: "targeted multiple legacy recipients",
 			mutate: func(envelope *Envelope) {
 				envelope.To = []string{"agent.worker", "agent.backup"}

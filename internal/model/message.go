@@ -347,11 +347,16 @@ func (e Envelope) validateRouting(requireOffbandSignature bool) error {
 		if strings.TrimSpace(e.Recipient) == "" {
 			return errors.New("recipient is required when scope is targeted")
 		}
-		// WO-92: legacy routing may only mirror the canonical targeted recipient.
+		// WO-92: the signed recipient must be canonical; consumers route the exact
+		// stored string, so leading/trailing whitespace would diverge from what was signed.
+		if e.Recipient != strings.TrimSpace(e.Recipient) {
+			return errors.New("recipient must not have leading or trailing whitespace when scope is targeted")
+		}
+		// WO-92: legacy routing may only mirror the canonical targeted recipient exactly.
 		if len(e.To) > 1 {
 			return errors.New("to must contain exactly one recipient when scope is targeted")
 		}
-		if len(e.To) == 1 && strings.TrimSpace(e.To[0]) != strings.TrimSpace(e.Recipient) {
+		if len(e.To) == 1 && strings.TrimSpace(e.To[0]) != e.Recipient {
 			return errors.New("to recipient must match recipient when scope is targeted")
 		}
 	}
