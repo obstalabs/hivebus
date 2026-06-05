@@ -47,6 +47,12 @@ const (
 	MessageTypeNRRunFailed            MessageType = "nr.run.failed"
 	MessageTypeNRRunCancelled         MessageType = "nr.run.cancelled"
 	MessageTypeNRRunAuditAnchor       MessageType = "nr.run.audit_anchor"
+
+	// WO-82: schema-only signed-envelope primitives for cross-agent messages.
+	MessageTypeQuery              MessageType = "query"
+	MessageTypeAnswer             MessageType = "answer"
+	MessageTypeRequest            MessageType = "request"
+	MessageTypeAuthorityDirective MessageType = "authority_directive"
 )
 
 var validMessageTypes = []MessageType{
@@ -83,6 +89,10 @@ var validMessageTypes = []MessageType{
 	MessageTypeNRRunFailed,
 	MessageTypeNRRunCancelled,
 	MessageTypeNRRunAuditAnchor,
+	MessageTypeQuery,
+	MessageTypeAnswer,
+	MessageTypeRequest,
+	MessageTypeAuthorityDirective,
 }
 
 // Trace captures provenance for audit and replay.
