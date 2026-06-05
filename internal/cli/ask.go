@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	cryptoRand "crypto/rand"
 	"encoding/base64"
@@ -8,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,19 +24,29 @@ const (
 	askMaxQuestionBytes    = 4096 // WO-84: keep query payloads bounded and read-only.
 	askRandomTokenBytes    = 16   // WO-84: compact opaque envelope correlation tokens.
 	askAnswerDelay         = time.Second
+	defaultAskLiveTimeout  = 5 * time.Second
+	defaultAskPollInterval = 100 * time.Millisecond
 )
 
 var (
-	askNow          = func() time.Time { return time.Now().UTC() }
-	askRandomReader = io.Reader(cryptoRand.Reader)
+	askNow                      = func() time.Time { return time.Now().UTC() }
+	askRandomReader             = io.Reader(cryptoRand.Reader)
+	askHTTPClient   askHTTPDoer = http.DefaultClient
+	askSleep                    = time.Sleep
 
 	askDeferredFollowups = []string{"broadcast-query", "offband-query", "answer-caching"}
 )
 
 type askOptions struct {
-	from         string
-	to           string
-	questionType string
+	from            string
+	to              string
+	questionType    string
+	serverURL       string
+	offline         bool
+	timeout         time.Duration
+	pollInterval    time.Duration
+	operatorToken   string
+	answerPublicKey string
 }
 
 // WO-84: askExchange is the local fixture transport for the first ask->answer slice.
@@ -60,10 +73,39 @@ type askAnswerPayload struct {
 	ReadOnly     bool   `json:"read_only"`
 }
 
+type askHTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+type askLiveTransport struct {
+	baseURL       string
+	operatorToken string
+	client        askHTTPDoer
+	now           func() time.Time
+	sleep         func(time.Duration)
+}
+
+// WO-94: signed query envelope travels through the existing server send Body.
+type askSendAgentMessageRequest struct {
+	From           string `json:"from,omitempty"`
+	To             string `json:"to,omitempty"`
+	Type           string `json:"type,omitempty"`
+	Body           string `json:"body"`
+	QueryPublicKey string `json:"query_public_key,omitempty"`
+}
+
+type askSendAgentMessageResponse struct {
+	Status  string          `json:"status"`
+	Message string          `json:"message"`
+	Receipt json.RawMessage `json:"receipt,omitempty"`
+}
+
 func newAskCommand() *cobra.Command {
 	options := askOptions{
 		from:         defaultAskFrom,
 		questionType: defaultAskQuestionType,
+		timeout:      defaultAskLiveTimeout,
+		pollInterval: defaultAskPollInterval,
 	}
 
 	cmd := &cobra.Command{
@@ -82,18 +124,49 @@ func newAskCommand() *cobra.Command {
 				return err
 			}
 
+			if normalizedOptions.useLiveDelivery() {
+				exchange, err := buildLiveAskExchange(
+					normalizedOptions,
+					question,
+					askNow(),
+					askRandomReader,
+					askLiveTransport{
+						baseURL:       normalizedOptions.serverURL,
+						operatorToken: normalizedOptions.operatorToken,
+						client:        askHTTPClient,
+						now:           askNow,
+						sleep:         askSleep,
+					},
+				)
+				if err != nil {
+					return err
+				}
+
+				return writeAskJSON(cmd.OutOrStdout(), exchange)
+			}
+
 			exchange, err := buildAskExchange(normalizedOptions, question, askNow(), askRandomReader)
 			if err != nil {
 				return err
 			}
-
 			return writeAskJSON(cmd.OutOrStdout(), exchange)
 		},
 	}
 
-	cmd.Flags().StringVar(&options.to, "to", "", "target agent identity")                               // WO-84: target warm agent.
-	cmd.Flags().StringVar(&options.from, "from", defaultAskFrom, "asking agent identity")               // WO-84: attributable asker.
-	cmd.Flags().StringVar(&options.questionType, "type", defaultAskQuestionType, "question type label") // WO-84: bounded query intent label.
+	cmd.Flags().StringVar(&options.to, "to", "", "target agent identity")                                      // WO-84: target warm agent.
+	cmd.Flags().StringVar(&options.from, "from", defaultAskFrom, "asking agent identity")                      // WO-84: attributable asker.
+	cmd.Flags().StringVar(&options.questionType, "type", defaultAskQuestionType, "question type label")        // WO-84: bounded query intent label.
+	cmd.Flags().StringVar(&options.serverURL, "server", "", "hivebus server URL for live delivery")            // WO-94: opt into server-backed ask.
+	cmd.Flags().BoolVar(&options.offline, "offline", false, "use the in-process fixture answer")               // WO-94: preserve fixture path.
+	cmd.Flags().DurationVar(&options.timeout, "timeout", defaultAskLiveTimeout, "live answer timeout")         // WO-94: bounded live wait.
+	cmd.Flags().DurationVar(&options.pollInterval, "poll-interval", defaultAskPollInterval, "answer poll gap") // WO-94: deterministic poll cadence.
+	cmd.Flags().StringVar(&options.operatorToken, "operator-token", "", "operator auth token for live ask")    // WO-94: RoleOperator bearer token.
+	cmd.Flags().StringVar(
+		&options.answerPublicKey,
+		"answer-public-key",
+		"",
+		"base64 ed25519 public key expected to sign the answer",
+	) // WO-94: verify answer provenance before trusting delivery.
 
 	return cmd
 }
@@ -147,6 +220,58 @@ func buildAskExchange(options askOptions, question string, sentAt time.Time, ran
 		Query:             query,
 		Answer:            answer,
 		QueryPublicKey:    base64.StdEncoding.EncodeToString(queryPublicKey),
+		AnswerPublicKey:   base64.StdEncoding.EncodeToString(answerPublicKey),
+		DeferredFollowups: append([]string(nil), askDeferredFollowups...),
+	}, nil
+}
+
+func buildLiveAskExchange(
+	options askOptions,
+	question string,
+	sentAt time.Time,
+	random io.Reader,
+	transport askLiveTransport,
+) (askExchange, error) {
+	options.normalize()
+	if err := options.validate(); err != nil {
+		return askExchange{}, err
+	}
+	if !options.useLiveDelivery() {
+		return askExchange{}, errors.New("server is required for live ask")
+	}
+	if sentAt.IsZero() {
+		return askExchange{}, errors.New("sent_at is required")
+	}
+
+	answerPublicKey, err := parseAskPublicKey(options.answerPublicKey)
+	if err != nil {
+		return askExchange{}, err
+	}
+
+	queryPublicKey, queryPrivateKey, err := ed25519.GenerateKey(random)
+	if err != nil {
+		return askExchange{}, err
+	}
+
+	query, err := buildSignedAskQuery(options, question, sentAt, queryPrivateKey, random)
+	if err != nil {
+		return askExchange{}, err
+	}
+	queryPublicKeyEncoded := base64.StdEncoding.EncodeToString(queryPublicKey)
+
+	if err := transport.sendQuery(query, options, queryPublicKeyEncoded); err != nil {
+		return askExchange{}, err
+	}
+
+	answer, err := transport.awaitAnswer(query, answerPublicKey, options)
+	if err != nil {
+		return askExchange{}, err
+	}
+
+	return askExchange{
+		Query:             query,
+		Answer:            answer,
+		QueryPublicKey:    queryPublicKeyEncoded,
 		AnswerPublicKey:   base64.StdEncoding.EncodeToString(answerPublicKey),
 		DeferredFollowups: append([]string(nil), askDeferredFollowups...),
 	}, nil
@@ -272,6 +397,189 @@ func buildFixtureAnswer(
 	return model.SignEnvelope(answer, answerPrivateKey)
 }
 
+func (transport askLiveTransport) sendQuery(
+	query model.Envelope,
+	options askOptions,
+	queryPublicKey string,
+) error {
+	body, err := json.Marshal(query)
+	if err != nil {
+		return err
+	}
+
+	requestPayload, err := json.Marshal(askSendAgentMessageRequest{
+		From:           options.from,
+		To:             options.to,
+		Type:           string(model.MessageTypeQuery),
+		Body:           string(body),
+		QueryPublicKey: queryPublicKey,
+	})
+	if err != nil {
+		return err
+	}
+
+	endpoint, err := askServerEndpoint(transport.baseURL, "/v0/agents/messages/send")
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(requestPayload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(transport.operatorToken) != "" {
+		request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(transport.operatorToken))
+	}
+
+	response, err := transport.httpClient().Do(request)
+	if err != nil {
+		return fmt.Errorf("send live ask query: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("send live ask query failed: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
+	}
+
+	var sendResponse askSendAgentMessageResponse
+	if len(strings.TrimSpace(string(responseBody))) > 0 {
+		if err := json.Unmarshal(responseBody, &sendResponse); err != nil {
+			return fmt.Errorf("send live ask response must be json: %w", err)
+		}
+	}
+	if sendResponse.Status != "" && !strings.EqualFold(sendResponse.Status, "ok") &&
+		!strings.EqualFold(sendResponse.Status, "accepted") &&
+		!strings.EqualFold(sendResponse.Status, "queued") {
+		return fmt.Errorf("send live ask query failed: %s", sendResponse.Message)
+	}
+
+	return nil
+}
+
+func (transport askLiveTransport) awaitAnswer(
+	query model.Envelope,
+	answerPublicKey ed25519.PublicKey,
+	options askOptions,
+) (model.Envelope, error) {
+	now := transport.clock()
+	deadline := now().Add(options.timeout)
+	maxPolls := askMaxLivePolls(options.timeout, options.pollInterval)
+
+	for attempt := 0; ; attempt++ {
+		answers, err := transport.fetchInboxAnswers(options.from)
+		if err != nil {
+			return model.Envelope{}, err
+		}
+		for _, answer := range answers {
+			if answer.ReplyTo != query.MessageID || answer.ThreadID != query.ThreadID {
+				continue
+			}
+			if err := validateLiveAskAnswer(query, answer, answerPublicKey, now()); err != nil {
+				return model.Envelope{}, err
+			}
+
+			return answer, nil
+		}
+
+		if !now().Before(deadline) || attempt+1 >= maxPolls {
+			return model.Envelope{}, fmt.Errorf(
+				"no live answerer produced an answer before %s for query %s",
+				options.timeout,
+				query.MessageID,
+			)
+		}
+		if options.pollInterval <= 0 {
+			return model.Envelope{}, fmt.Errorf(
+				"no live answerer produced an answer before %s for query %s",
+				options.timeout,
+				query.MessageID,
+			)
+		}
+		transport.sleeper()(options.pollInterval)
+	}
+}
+
+func askMaxLivePolls(timeout time.Duration, pollInterval time.Duration) int {
+	if timeout <= 0 || pollInterval <= 0 {
+		return 1
+	}
+
+	polls := int(timeout / pollInterval)
+	if timeout%pollInterval != 0 {
+		polls++
+	}
+
+	return polls + 1
+}
+
+func (transport askLiveTransport) fetchInboxAnswers(sessionID string) ([]model.Envelope, error) {
+	endpoint, err := askServerEndpoint(
+		transport.baseURL,
+		"/v0/agents/sessions/"+url.PathEscape(sessionID)+"/inbox",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(transport.operatorToken) != "" {
+		request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(transport.operatorToken))
+	}
+
+	response, err := transport.httpClient().Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("poll live ask inbox: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("poll live ask inbox failed: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	answers, err := decodeAskInboxAnswers(body)
+	if err != nil {
+		return nil, err
+	}
+
+	return answers, nil
+}
+
+func validateLiveAskAnswer(
+	query model.Envelope,
+	answer model.Envelope,
+	answerPublicKey ed25519.PublicKey,
+	now time.Time,
+) error {
+	if err := model.VerifyEnvelope(answer, answerPublicKey); err != nil {
+		return fmt.Errorf("answer signature verification failed: %w", err)
+	}
+	if answer.Type != model.MessageTypeAnswer {
+		return fmt.Errorf("answer type = %q, want %q", answer.Type, model.MessageTypeAnswer)
+	}
+	if answer.ReplyTo != query.MessageID {
+		return fmt.Errorf("answer reply_to = %q, want %q", answer.ReplyTo, query.MessageID)
+	}
+	if answer.ThreadID != query.ThreadID {
+		return fmt.Errorf("answer thread_id = %q, want %q", answer.ThreadID, query.ThreadID)
+	}
+	if answer.Deadline != nil && now.After(*answer.Deadline) {
+		return errors.New("answer is expired")
+	}
+
+	return nil
+}
+
 func validateAskQueryReadOnly(envelope model.Envelope) error {
 	if envelope.Type != model.MessageTypeQuery {
 		return fmt.Errorf("ask query must use type %q", model.MessageTypeQuery)
@@ -299,6 +607,101 @@ func validateAskQueryReadOnly(envelope model.Envelope) error {
 	return nil
 }
 
+func decodeAskInboxAnswers(data []byte) ([]model.Envelope, error) {
+	return decodeAskInboxAnswersDepth(data, 0)
+}
+
+func decodeAskInboxAnswersDepth(data []byte, depth int) ([]model.Envelope, error) {
+	if depth > 4 {
+		return nil, errors.New("live ask inbox nesting is too deep")
+	}
+
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	var envelope model.Envelope
+	if err := json.Unmarshal(data, &envelope); err == nil && envelope.Type != "" {
+		return []model.Envelope{envelope}, nil
+	}
+
+	var envelopeList []model.Envelope
+	if err := json.Unmarshal(data, &envelopeList); err == nil {
+		envelopes := make([]model.Envelope, 0, len(envelopeList))
+		for _, listEnvelope := range envelopeList {
+			if listEnvelope.Type != "" {
+				envelopes = append(envelopes, listEnvelope)
+			}
+		}
+		if len(envelopes) > 0 {
+			return envelopes, nil
+		}
+	}
+
+	var rawList []json.RawMessage
+	if err := json.Unmarshal(data, &rawList); err == nil {
+		var answers []model.Envelope
+		for _, raw := range rawList {
+			nested, err := decodeAskInboxAnswersDepth(raw, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			answers = append(answers, nested...)
+		}
+
+		return answers, nil
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil, fmt.Errorf("live ask inbox must be json: %w", err)
+	}
+
+	var answers []model.Envelope
+	for _, key := range []string{"messages", "items", "inbox", "answers"} {
+		raw, exists := object[key]
+		if !exists {
+			continue
+		}
+		nested, err := decodeAskInboxAnswersDepth(raw, depth+1)
+		if err != nil {
+			return nil, err
+		}
+		answers = append(answers, nested...)
+	}
+
+	for _, key := range []string{"body", "Body"} {
+		raw, exists := object[key]
+		if !exists {
+			continue
+		}
+		var body string
+		if err := json.Unmarshal(raw, &body); err != nil {
+			return nil, fmt.Errorf("live ask inbox body must be a string: %w", err)
+		}
+		nested, err := decodeAskInboxAnswersDepth([]byte(body), depth+1)
+		if err != nil {
+			return nil, err
+		}
+		answers = append(answers, nested...)
+	}
+
+	for _, key := range []string{"envelope", "message"} {
+		raw, exists := object[key]
+		if !exists {
+			continue
+		}
+		nested, err := decodeAskInboxAnswersDepth(raw, depth+1)
+		if err != nil {
+			return nil, err
+		}
+		answers = append(answers, nested...)
+	}
+
+	return answers, nil
+}
+
 func decodeAskQueryPayload(payload json.RawMessage) (askQueryPayload, error) {
 	var query askQueryPayload
 	if err := json.Unmarshal(payload, &query); err != nil {
@@ -312,6 +715,37 @@ func decodeAskQueryPayload(payload json.RawMessage) (askQueryPayload, error) {
 	}
 
 	return query, nil
+}
+
+func parseAskPublicKey(encoded string) (ed25519.PublicKey, error) {
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("answer public key must be base64 ed25519: %w", err)
+	}
+	if len(decoded) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("answer public key size = %d, want %d", len(decoded), ed25519.PublicKeySize)
+	}
+
+	return ed25519.PublicKey(decoded), nil
+}
+
+func askServerEndpoint(rawBaseURL string, endpointPath string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawBaseURL))
+	if err != nil {
+		return "", fmt.Errorf("server URL is invalid: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("server URL must use http or https")
+	}
+	if parsed.Host == "" {
+		return "", errors.New("server URL must include a host")
+	}
+
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + endpointPath
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	return parsed.String(), nil
 }
 
 func answerFromWarmContext(question string, responder string, questionType string) string {
@@ -345,6 +779,9 @@ func (options *askOptions) normalize() {
 	options.from = strings.TrimSpace(options.from)
 	options.to = strings.TrimSpace(options.to)
 	options.questionType = strings.TrimSpace(options.questionType)
+	options.serverURL = strings.TrimRight(strings.TrimSpace(options.serverURL), "/")
+	options.operatorToken = strings.TrimSpace(options.operatorToken)
+	options.answerPublicKey = strings.TrimSpace(options.answerPublicKey)
 }
 
 func (options askOptions) validate() error {
@@ -355,7 +792,43 @@ func (options askOptions) validate() error {
 		return errors.New("to is required")
 	case options.questionType == "":
 		return errors.New("type is required")
+	case options.offline && options.serverURL != "":
+		return errors.New("offline cannot be combined with server")
+	case options.timeout < 0:
+		return errors.New("timeout must be non-negative")
+	case options.pollInterval < 0:
+		return errors.New("poll-interval must be non-negative")
+	case options.useLiveDelivery() && options.answerPublicKey == "":
+		return errors.New("answer-public-key is required for live ask verification")
 	default:
 		return nil
 	}
+}
+
+func (options askOptions) useLiveDelivery() bool {
+	return options.serverURL != "" && !options.offline
+}
+
+func (transport askLiveTransport) httpClient() askHTTPDoer {
+	if transport.client != nil {
+		return transport.client
+	}
+
+	return http.DefaultClient
+}
+
+func (transport askLiveTransport) clock() func() time.Time {
+	if transport.now != nil {
+		return transport.now
+	}
+
+	return time.Now
+}
+
+func (transport askLiveTransport) sleeper() func(time.Duration) {
+	if transport.sleep != nil {
+		return transport.sleep
+	}
+
+	return time.Sleep
 }

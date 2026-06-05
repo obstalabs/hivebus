@@ -5,6 +5,7 @@
 ### Added
 
 - `hivebus ask` read-only query/answer primitive for signed direct agent questions.
+- `hivebus ask --server` live delivery for signed localhost ask/answer dogfood loops.
 - Orthogonal envelope routing fields for visibility, scope, reply policy, redirects, and collection.
 - Signed envelope schema primitives for query, answer, request, and authority directive messages.
 - Typed NeuroRouter agent-run lifecycle envelopes (`nr.run.*`) — hivebus as receipts substrate for governed runs.
