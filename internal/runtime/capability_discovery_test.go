@@ -101,7 +101,8 @@ func seedObservedCapability(
 ) {
 	t.Helper()
 
-	baseTime := time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)
+	// WO-85: keep capability observations inside the trust-decay window.
+	baseTime := currentTime().Add(-time.Duration(count) * time.Hour)
 	for i := 0; i < count; i++ {
 		thread := sampleThread()
 		thread.ThreadID = fmt.Sprintf("thr_capability_http_%d", i+1)
