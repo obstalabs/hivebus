@@ -2,6 +2,7 @@ package model
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -44,7 +45,8 @@ func TestSignEnvelopeRoundTripsSchemaMessageTypes(t *testing.T) {
 	}
 }
 
-func TestVerifyEnvelopeRejectsTamperedReplyRoutingFields(t *testing.T) {
+// WO-89: exercise the post-sign mutation matrix required by the signed-envelope contract.
+func TestVerifyEnvelopeRejectsPostSignMutation(t *testing.T) {
 	publicKey, privateKey := deterministicSigningKey()
 	envelope := signedEnvelopeFixtures(t)[2]
 
@@ -52,10 +54,46 @@ func TestVerifyEnvelopeRejectsTamperedReplyRoutingFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignEnvelope() error = %v", err)
 	}
+	if err := VerifyEnvelope(signed, publicKey); err != nil {
+		t.Fatalf("VerifyEnvelope() before tamper error = %v", err)
+	}
 
-	signed.ReplyTo = "message-other"
-	if err := VerifyEnvelope(signed, publicKey); err == nil {
-		t.Fatal("VerifyEnvelope() expected a tamper error")
+	tests := []struct {
+		name   string
+		tamper func(*Envelope)
+	}{
+		{name: "payload", tamper: func(envelope *Envelope) {
+			envelope.Payload = json.RawMessage(`{"intent":"prioritize_blocker","tampered":true}`)
+		}},
+		{name: "from", tamper: func(envelope *Envelope) {
+			envelope.From = "other/agent"
+		}},
+		{name: "to", tamper: func(envelope *Envelope) {
+			envelope.To = []string{"other/agent"}
+		}},
+		{name: "thread_id", tamper: func(envelope *Envelope) {
+			envelope.ThreadID = "thread-other"
+		}},
+		{name: "type", tamper: func(envelope *Envelope) {
+			envelope.Type = MessageTypeAnswer
+		}},
+		{name: "security_nonce", tamper: func(envelope *Envelope) {
+			envelope.Security.Nonce = "other-nonce"
+		}},
+		{name: "reply_to", tamper: func(envelope *Envelope) {
+			envelope.ReplyTo = "message-other"
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tampered := signed
+			test.tamper(&tampered)
+
+			if err := VerifyEnvelope(tampered, publicKey); err == nil {
+				t.Fatal("VerifyEnvelope() expected a tamper error")
+			}
+		})
 	}
 }
 
@@ -69,6 +107,7 @@ func TestSignEnvelopeRejectsInvalidEnvelope(t *testing.T) {
 	}
 }
 
+// WO-90: valid base64 with the wrong byte length must reach ed25519 size validation.
 func TestVerifyEnvelopeRejectsMalformedSignature(t *testing.T) {
 	publicKey, privateKey := deterministicSigningKey()
 	envelope := signedEnvelopeFixtures(t)[0]
@@ -77,14 +116,32 @@ func TestVerifyEnvelopeRejectsMalformedSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignEnvelope() error = %v", err)
 	}
+	if err := VerifyEnvelope(signed, publicKey); err != nil {
+		t.Fatalf("VerifyEnvelope() before signature mutation error = %v", err)
+	}
 
-	signed.Security.Signature = "not-base64"
-	if err := VerifyEnvelope(signed, publicKey); err == nil {
-		t.Fatal("VerifyEnvelope() expected malformed signature error")
+	tests := []struct {
+		name      string
+		signature string
+	}{
+		{name: "not_base64", signature: "not-base64"},
+		{name: "wrong_length", signature: base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize-1))},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := signed
+			mutated.Security.Signature = test.signature
+
+			if err := VerifyEnvelope(mutated, publicKey); err == nil {
+				t.Fatal("VerifyEnvelope() expected malformed signature error")
+			}
+		})
 	}
 }
 
-func TestCanonicalEnvelopeBytesIgnoreMutableSignatureFields(t *testing.T) {
+// WO-88: Security.Signed stays authenticated while Security.Signature is excluded.
+func TestCanonicalEnvelopeBytesExcludeSignatureOnly(t *testing.T) {
 	envelope := signedEnvelopeFixtures(t)[0]
 
 	first, err := CanonicalEnvelopeBytes(envelope)
@@ -92,7 +149,6 @@ func TestCanonicalEnvelopeBytesIgnoreMutableSignatureFields(t *testing.T) {
 		t.Fatalf("CanonicalEnvelopeBytes() error = %v", err)
 	}
 
-	envelope.Security.Signed = true
 	envelope.Security.Signature = "signature-written-after-canonicalization"
 	second, err := CanonicalEnvelopeBytes(envelope)
 	if err != nil {
@@ -100,7 +156,17 @@ func TestCanonicalEnvelopeBytesIgnoreMutableSignatureFields(t *testing.T) {
 	}
 
 	if string(first) != string(second) {
-		t.Fatal("CanonicalEnvelopeBytes() changed after mutable signature fields changed")
+		t.Fatal("CanonicalEnvelopeBytes() changed after signature changed")
+	}
+
+	envelope.Security.Signed = true
+	third, err := CanonicalEnvelopeBytes(envelope)
+	if err != nil {
+		t.Fatalf("CanonicalEnvelopeBytes() signed error = %v", err)
+	}
+
+	if string(first) == string(third) {
+		t.Fatal("CanonicalEnvelopeBytes() did not bind security.signed")
 	}
 }
 

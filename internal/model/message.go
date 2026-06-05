@@ -48,7 +48,7 @@ const (
 	MessageTypeNRRunCancelled         MessageType = "nr.run.cancelled"
 	MessageTypeNRRunAuditAnchor       MessageType = "nr.run.audit_anchor"
 
-	// WO-82: schema-only signed-envelope primitives for cross-agent messages.
+	// WO-87: schema-only signed-envelope primitives for cross-agent messages.
 	MessageTypeQuery              MessageType = "query"
 	MessageTypeAnswer             MessageType = "answer"
 	MessageTypeRequest            MessageType = "request"

@@ -12,11 +12,10 @@ import (
 // SecuritySchemeEd25519 identifies ed25519 signatures encoded with standard base64.
 const SecuritySchemeEd25519 = "ed25519"
 
-// CanonicalEnvelopeBytes returns the deterministic WO-82 signing payload for an envelope.
+// CanonicalEnvelopeBytes returns the deterministic WO-87 signing payload for an envelope.
 func CanonicalEnvelopeBytes(envelope Envelope) ([]byte, error) {
 	unsigned := envelope
 	unsigned.Security.Signature = ""
-	unsigned.Security.Signed = false
 
 	return json.Marshal(unsigned)
 }
@@ -33,6 +32,7 @@ func SignEnvelope(envelope Envelope, privateKey ed25519.PrivateKey) (Envelope, e
 		return Envelope{}, err
 	}
 
+	envelope.Security.Signed = true // WO-88: signed state is authenticated; only signature bytes are excluded.
 	canonical, err := CanonicalEnvelopeBytes(envelope)
 	if err != nil {
 		return Envelope{}, err
@@ -40,7 +40,6 @@ func SignEnvelope(envelope Envelope, privateKey ed25519.PrivateKey) (Envelope, e
 
 	signature := ed25519.Sign(privateKey, canonical)
 	envelope.Security.Signature = base64.StdEncoding.EncodeToString(signature)
-	envelope.Security.Signed = true
 
 	return envelope, nil
 }
