@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -115,6 +116,7 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(7)
 	var sentRequest askSendAgentMessageRequest
 	var sentQuery model.Envelope
+	var rawSentRequest map[string]json.RawMessage
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -122,8 +124,32 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 			if got := r.Header.Get("Authorization"); got != "Bearer operator-token" {
 				t.Fatalf("Authorization = %q, want bearer token", got)
 			}
-			if err := json.NewDecoder(r.Body).Decode(&sentRequest); err != nil {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("ReadAll(send request) error = %v", err)
+			}
+			if err := json.Unmarshal(body, &rawSentRequest); err != nil {
+				t.Fatalf("Unmarshal(raw send request) error = %v", err)
+			}
+			if err := json.Unmarshal(body, &sentRequest); err != nil {
 				t.Fatalf("Decode(send request) error = %v", err)
+			}
+			for _, forbidden := range []string{"from", "to", "type", "query_public_key"} {
+				if _, exists := rawSentRequest[forbidden]; exists {
+					t.Fatalf("send request includes fake-only field %q", forbidden)
+				}
+			}
+			if sentRequest.MessageID == "" {
+				t.Fatal("send request message_id is empty")
+			}
+			if sentRequest.SenderSessionID != "asker-session" {
+				t.Fatalf("sender_session_id = %q, want asker-session", sentRequest.SenderSessionID)
+			}
+			if sentRequest.SenderParticipantID != "architect/agent" {
+				t.Fatalf("sender_participant_id = %q, want architect/agent", sentRequest.SenderParticipantID)
+			}
+			if sentRequest.TargetParticipantID != "workledger/agent" {
+				t.Fatalf("target_participant_id = %q, want workledger/agent", sentRequest.TargetParticipantID)
 			}
 			if sentRequest.Body == "" {
 				t.Fatal("send request body is empty")
@@ -131,15 +157,21 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 			if err := json.Unmarshal([]byte(sentRequest.Body), &sentQuery); err != nil {
 				t.Fatalf("Unmarshal(query body) error = %v", err)
 			}
-			queryPublicKey, err := parseAskPublicKey(sentRequest.QueryPublicKey)
-			if err != nil {
-				t.Fatalf("parse query public key error = %v", err)
+			if sentRequest.MessageID != sentQuery.MessageID {
+				t.Fatalf("send request message_id = %q, want query %q", sentRequest.MessageID, sentQuery.MessageID)
 			}
-			if err := model.VerifyEnvelope(sentQuery, queryPublicKey); err != nil {
-				t.Fatalf("VerifyEnvelope(sent query) error = %v", err)
+			writeJSONResponse(t, w, map[string]any{
+				"status": "queued",
+				"message": map[string]string{
+					"message_id": sentRequest.MessageID,
+					"body":       sentRequest.Body,
+				},
+				"receipt": map[string]string{"state": "queued"},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/agents/sessions/asker-session/inbox":
+			if got := r.Header.Get("Authorization"); got != "Bearer worker-token" {
+				t.Fatalf("inbox Authorization = %q, want worker bearer token", got)
 			}
-			writeJSONResponse(t, w, askSendAgentMessageResponse{Status: "accepted"})
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/inbox"):
 			answer := signLiveAskAnswer(
 				t,
 				sentQuery,
@@ -150,8 +182,20 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Marshal(answer) error = %v", err)
 			}
-			writeJSONResponse(t, w, map[string][]map[string]string{
-				"messages": {{"body": string(answerBody)}},
+			writeJSONResponse(t, w, map[string]any{
+				"status": "ok",
+				"session": map[string]string{
+					"session_id":     "asker-session",
+					"participant_id": "architect/agent",
+				},
+				"messages": []map[string]any{
+					{
+						"message": map[string]string{
+							"message_id": "answer-live",
+							"body":       string(answerBody),
+						},
+					},
+				},
 			})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -165,7 +209,9 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 		"--to", "workledger/agent",
 		"--from", "architect/agent",
 		"--type", "canonical_repo",
+		"--session-id", "asker-session",
 		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
 		"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
 	})
 	cmd.SetIn(strings.NewReader("which workledger checkout is canonical and what's HEAD?\n"))
@@ -193,8 +239,102 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 	if exchange.Answer.ThreadID != exchange.Query.ThreadID {
 		t.Fatalf("answer thread_id = %q, want %q", exchange.Answer.ThreadID, exchange.Query.ThreadID)
 	}
-	if exchange.QueryPublicKey != sentRequest.QueryPublicKey {
-		t.Fatalf("query_public_key output != send request key")
+	queryPublicKey := decodeAskPublicKey(t, exchange.QueryPublicKey)
+	if err := model.VerifyEnvelope(sentQuery, queryPublicKey); err != nil {
+		t.Fatalf("VerifyEnvelope(sent query) error = %v", err)
+	}
+}
+
+func TestAskCommandRejectsLiveAskWithoutRuntimeSessionAuth(t *testing.T) {
+	answerPublicKey, _ := deterministicAskSigningKey(12)
+	validOptions := askOptions{
+		from:            "architect/agent",
+		to:              "workledger/agent",
+		questionType:    "canonical_repo",
+		serverURL:       "http://127.0.0.1:8080",
+		timeout:         defaultAskLiveTimeout,
+		pollInterval:    defaultAskPollInterval,
+		sessionID:       "asker-session",
+		operatorToken:   "operator-token",
+		workerToken:     "worker-token",
+		answerPublicKey: base64.StdEncoding.EncodeToString(answerPublicKey),
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*askOptions)
+		wantErr string
+	}{
+		{
+			name: "session_id",
+			mutate: func(options *askOptions) {
+				options.sessionID = ""
+			},
+			wantErr: "session-id is required",
+		},
+		{
+			name: "operator_token",
+			mutate: func(options *askOptions) {
+				options.operatorToken = ""
+			},
+			wantErr: "operator-token is required",
+		},
+		{
+			name: "worker_token",
+			mutate: func(options *askOptions) {
+				options.workerToken = ""
+			},
+			wantErr: "worker-token is required",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := validOptions
+			test.mutate(&options)
+			if err := options.validate(); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("validate() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestAskCommandLiveSendResponseObjectStillFailsRejectedStatus(t *testing.T) {
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, _ := deterministicAskSigningKey(13)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
+			writeJSONResponse(t, w, map[string]any{
+				"status": "rejected",
+				"message": map[string]string{
+					"message_id": "query-rejected",
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cmd := newAskCommand()
+	cmd.SetArgs([]string{
+		"--server", server.URL,
+		"--to", "workledger/agent",
+		"--session-id", "asker-session",
+		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
+		"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
+	})
+	cmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("ask command expected rejected send status")
+	}
+	if !strings.Contains(err.Error(), "send live ask query failed") {
+		t.Fatalf("ask command error = %q, want send failure", err)
 	}
 }
 
@@ -220,6 +360,9 @@ func TestAskCommandLiveTimeoutDoesNotFabricateAnswer(t *testing.T) {
 		"--to", "workledger/agent",
 		"--timeout", "0s",
 		"--poll-interval", "0s",
+		"--session-id", "asker-session",
+		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
 		"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
 	})
 	cmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))
@@ -275,6 +418,9 @@ func TestAskCommandRejectsUnverifiedLiveAnswer(t *testing.T) {
 	cmd.SetArgs([]string{
 		"--server", server.URL,
 		"--to", "workledger/agent",
+		"--session-id", "asker-session",
+		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
 		"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
 	})
 	cmd.SetIn(strings.NewReader("who owns this?\n"))
@@ -330,6 +476,9 @@ func TestAskCommandSurfacesUnsupportedQueryClassAnswer(t *testing.T) {
 		"--server", server.URL,
 		"--to", "workledger/agent",
 		"--type", "canonical_repo",
+		"--session-id", "asker-session",
+		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
 		"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
 	})
 	cmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))

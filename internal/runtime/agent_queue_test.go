@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -114,6 +115,69 @@ func TestAgentMessagingLifecycleOverHTTP(t *testing.T) {
 	}
 	if len(record.Events) != 2 {
 		t.Fatalf("expected queued + delivered events, got %#v", record.Events)
+	}
+}
+
+func TestAgentMessagingAcceptsSignedAskQueryBodyOverHTTP(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	handler := NewHandler(st, openTestArtifactStore(t), keys)
+
+	mustRegisterAgentSession(t, handler, "sess_asker_001", "architect/agent")
+	mustRegisterAgentSession(t, handler, "sess_answerer_001", "workledger/agent")
+
+	// WO-97: runtime send must accept the exact Body string emitted by live ask.
+	queryBody := marshalJSON(t, mustSignedAgentAskEnvelope(t))
+	sendBody := marshalJSON(t, sendAgentMessageRequest{
+		MessageID:           "query-wo97",
+		SenderSessionID:     "sess_asker_001",
+		SenderParticipantID: "architect/agent",
+		TargetParticipantID: "workledger/agent",
+		Body:                string(queryBody),
+	})
+	sendReq := httptest.NewRequest(
+		http.MethodPost,
+		"/v0/agents/messages/send",
+		bytes.NewReader(sendBody),
+	)
+	sendReq.Header.Set("Content-Type", "application/json")
+	sendReq.Header.Set("Authorization", "Bearer operator-secret")
+	sendRec := httptest.NewRecorder()
+	handler.ServeHTTP(sendRec, sendReq)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("send status = %d, body = %s", sendRec.Code, sendRec.Body.String())
+	}
+
+	var sendResponse sendAgentMessageResponse
+	if err := json.Unmarshal(sendRec.Body.Bytes(), &sendResponse); err != nil {
+		t.Fatalf("Unmarshal(sendResponse) error = %v", err)
+	}
+	if sendResponse.Message.MessageID != "query-wo97" {
+		t.Fatalf("send response message_id = %q, want query-wo97", sendResponse.Message.MessageID)
+	}
+
+	inboxReq := httptest.NewRequest(http.MethodGet, "/v0/agents/sessions/sess_answerer_001/inbox", nil)
+	inboxReq.Header.Set("Authorization", "Bearer worker-secret")
+	inboxRec := httptest.NewRecorder()
+	handler.ServeHTTP(inboxRec, inboxReq)
+	if inboxRec.Code != http.StatusOK {
+		t.Fatalf("inbox status = %d, body = %s", inboxRec.Code, inboxRec.Body.String())
+	}
+
+	var inbox inboxResponse
+	if err := json.Unmarshal(inboxRec.Body.Bytes(), &inbox); err != nil {
+		t.Fatalf("Unmarshal(inbox) error = %v", err)
+	}
+	if len(inbox.Messages) != 1 {
+		t.Fatalf("inbox messages = %#v, want one", inbox.Messages)
+	}
+	if inbox.Messages[0].Message.MessageID != "query-wo97" {
+		t.Fatalf("inbox message_id = %q, want query-wo97", inbox.Messages[0].Message.MessageID)
+	}
+	if inbox.Messages[0].Message.Body != string(queryBody) {
+		t.Fatalf("inbox body = %q, want signed query body", inbox.Messages[0].Message.Body)
 	}
 }
 
@@ -312,4 +376,37 @@ func mustSendAgentMessage(
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("send status = %d, body = %s", rec.Code, rec.Body.String())
 	}
+}
+
+func mustSignedAgentAskEnvelope(t *testing.T) model.Envelope {
+	t.Helper()
+
+	// WO-97: exercise runtime queueing with the same signed query envelope kind live ask sends.
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{97}, ed25519.SeedSize))
+	query := model.Envelope{
+		MessageID:      "query-wo97",
+		ThreadID:       "thread-wo97",
+		From:           "architect/agent",
+		To:             []string{"workledger/agent"},
+		Type:           model.MessageTypeQuery,
+		Payload:        json.RawMessage(`{"question":"which workledger checkout is canonical?","question_type":"canonical_repo","read_only":true}`),
+		SentAt:         time.Now().UTC(),
+		IdempotencyKey: "idem-query-wo97",
+		Trace: model.Trace{
+			CorrelationID:   "corr-wo97",
+			Verified:        true,
+			PromotionStatus: model.PromotionStatusPassed,
+		},
+		Security: model.Security{
+			Scheme: model.SecuritySchemeEd25519,
+			Nonce:  "nonce-wo97",
+		},
+	}
+
+	signed, err := model.SignEnvelope(query, privateKey)
+	if err != nil {
+		t.Fatalf("SignEnvelope(query) error = %v", err)
+	}
+
+	return signed
 }

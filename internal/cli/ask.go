@@ -45,7 +45,9 @@ type askOptions struct {
 	offline         bool
 	timeout         time.Duration
 	pollInterval    time.Duration
+	sessionID       string // WO-98: runtime session ID used for live inbox polling.
 	operatorToken   string
+	workerToken     string // WO-98: RoleWorker bearer token for live ask inbox reads.
 	answerPublicKey string
 }
 
@@ -80,23 +82,24 @@ type askHTTPDoer interface {
 type askLiveTransport struct {
 	baseURL       string
 	operatorToken string
+	workerToken   string // WO-98: separate worker auth for runtime inbox polling.
 	client        askHTTPDoer
 	now           func() time.Time
 	sleep         func(time.Duration)
 }
 
-// WO-94: signed query envelope travels through the existing server send Body.
+// WO-97: signed query envelope travels through the runtime send message contract.
 type askSendAgentMessageRequest struct {
-	From           string `json:"from,omitempty"`
-	To             string `json:"to,omitempty"`
-	Type           string `json:"type,omitempty"`
-	Body           string `json:"body"`
-	QueryPublicKey string `json:"query_public_key,omitempty"`
+	MessageID           string `json:"message_id"`
+	SenderSessionID     string `json:"sender_session_id"`
+	SenderParticipantID string `json:"sender_participant_id"`
+	TargetParticipantID string `json:"target_participant_id"`
+	Body                string `json:"body"`
 }
 
 type askSendAgentMessageResponse struct {
 	Status  string          `json:"status"`
-	Message string          `json:"message"`
+	Message json.RawMessage `json:"message"` // WO-99: runtime returns an object-valued AgentMessage.
 	Receipt json.RawMessage `json:"receipt,omitempty"`
 }
 
@@ -133,6 +136,7 @@ func newAskCommand() *cobra.Command {
 					askLiveTransport{
 						baseURL:       normalizedOptions.serverURL,
 						operatorToken: normalizedOptions.operatorToken,
+						workerToken:   normalizedOptions.workerToken,
 						client:        askHTTPClient,
 						now:           askNow,
 						sleep:         askSleep,
@@ -161,6 +165,8 @@ func newAskCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&options.timeout, "timeout", defaultAskLiveTimeout, "live answer timeout")         // WO-94: bounded live wait.
 	cmd.Flags().DurationVar(&options.pollInterval, "poll-interval", defaultAskPollInterval, "answer poll gap") // WO-94: deterministic poll cadence.
 	cmd.Flags().StringVar(&options.operatorToken, "operator-token", "", "operator auth token for live ask")    // WO-94: RoleOperator bearer token.
+	cmd.Flags().StringVar(&options.sessionID, "session-id", "", "asking agent runtime session ID")             // WO-98: poll a real runtime session.
+	cmd.Flags().StringVar(&options.workerToken, "worker-token", "", "worker auth token for live ask inbox")    // WO-98: RoleWorker bearer token.
 	cmd.Flags().StringVar(
 		&options.answerPublicKey,
 		"answer-public-key",
@@ -259,7 +265,7 @@ func buildLiveAskExchange(
 	}
 	queryPublicKeyEncoded := base64.StdEncoding.EncodeToString(queryPublicKey)
 
-	if err := transport.sendQuery(query, options, queryPublicKeyEncoded); err != nil {
+	if err := transport.sendQuery(query, options); err != nil {
 		return askExchange{}, err
 	}
 
@@ -400,7 +406,6 @@ func buildFixtureAnswer(
 func (transport askLiveTransport) sendQuery(
 	query model.Envelope,
 	options askOptions,
-	queryPublicKey string,
 ) error {
 	body, err := json.Marshal(query)
 	if err != nil {
@@ -408,11 +413,11 @@ func (transport askLiveTransport) sendQuery(
 	}
 
 	requestPayload, err := json.Marshal(askSendAgentMessageRequest{
-		From:           options.from,
-		To:             options.to,
-		Type:           string(model.MessageTypeQuery),
-		Body:           string(body),
-		QueryPublicKey: queryPublicKey,
+		MessageID:           query.MessageID,
+		SenderSessionID:     options.sessionID,
+		SenderParticipantID: options.from,
+		TargetParticipantID: options.to,
+		Body:                string(body),
 	})
 	if err != nil {
 		return err
@@ -454,7 +459,15 @@ func (transport askLiveTransport) sendQuery(
 	if sendResponse.Status != "" && !strings.EqualFold(sendResponse.Status, "ok") &&
 		!strings.EqualFold(sendResponse.Status, "accepted") &&
 		!strings.EqualFold(sendResponse.Status, "queued") {
-		return fmt.Errorf("send live ask query failed: %s", sendResponse.Message)
+		message := strings.TrimSpace(string(sendResponse.Message))
+		var textMessage string
+		if err := json.Unmarshal(sendResponse.Message, &textMessage); err == nil {
+			message = strings.TrimSpace(textMessage)
+		}
+		if message == "" {
+			message = sendResponse.Status
+		}
+		return fmt.Errorf("send live ask query failed: %s", message)
 	}
 
 	return nil
@@ -470,7 +483,7 @@ func (transport askLiveTransport) awaitAnswer(
 	maxPolls := askMaxLivePolls(options.timeout, options.pollInterval)
 
 	for attempt := 0; ; attempt++ {
-		answers, err := transport.fetchInboxAnswers(options.from)
+		answers, err := transport.fetchInboxAnswers(options.sessionID)
 		if err != nil {
 			return model.Envelope{}, err
 		}
@@ -529,8 +542,8 @@ func (transport askLiveTransport) fetchInboxAnswers(sessionID string) ([]model.E
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(transport.operatorToken) != "" {
-		request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(transport.operatorToken))
+	if strings.TrimSpace(transport.workerToken) != "" {
+		request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(transport.workerToken))
 	}
 
 	response, err := transport.httpClient().Do(request)
@@ -780,7 +793,9 @@ func (options *askOptions) normalize() {
 	options.to = strings.TrimSpace(options.to)
 	options.questionType = strings.TrimSpace(options.questionType)
 	options.serverURL = strings.TrimRight(strings.TrimSpace(options.serverURL), "/")
+	options.sessionID = strings.TrimSpace(options.sessionID)
 	options.operatorToken = strings.TrimSpace(options.operatorToken)
+	options.workerToken = strings.TrimSpace(options.workerToken)
 	options.answerPublicKey = strings.TrimSpace(options.answerPublicKey)
 }
 
@@ -798,6 +813,12 @@ func (options askOptions) validate() error {
 		return errors.New("timeout must be non-negative")
 	case options.pollInterval < 0:
 		return errors.New("poll-interval must be non-negative")
+	case options.useLiveDelivery() && options.sessionID == "":
+		return errors.New("session-id is required for live ask inbox polling")
+	case options.useLiveDelivery() && options.operatorToken == "":
+		return errors.New("operator-token is required for live ask send")
+	case options.useLiveDelivery() && options.workerToken == "":
+		return errors.New("worker-token is required for live ask inbox polling")
 	case options.useLiveDelivery() && options.answerPublicKey == "":
 		return errors.New("answer-public-key is required for live ask verification")
 	default:
