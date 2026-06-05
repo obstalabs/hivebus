@@ -55,6 +55,47 @@ const (
 	MessageTypeAuthorityDirective MessageType = "authority_directive"
 )
 
+// Visibility describes whether a message appears in-band or uses the ether/off-band pipe.
+type Visibility string
+
+const (
+	// WO-82: orthogonal routing field values are signed envelope data, not delivery behavior.
+	VisibilityInband  Visibility = "inband"
+	VisibilityOffband Visibility = "offband"
+)
+
+// Scope describes whether a message targets one route recipient or announces to a broadcast scope.
+type Scope string
+
+const (
+	// WO-82: direction is derived from route composition, so scope stays independent.
+	ScopeTargeted  Scope = "targeted"
+	ScopeBroadcast Scope = "broadcast"
+)
+
+// ReplyPolicy describes how replies are expected to flow from this envelope.
+type ReplyPolicy string
+
+const (
+	// WO-82: named message modes emerge from these reply fields instead of a direction enum.
+	ReplyPolicyNone          ReplyPolicy = "none"
+	ReplyPolicyReplyToSender ReplyPolicy = "reply_to_sender"
+	ReplyPolicyReplyToTarget ReplyPolicy = "reply_to_target"
+	ReplyPolicyCollect       ReplyPolicy = "collect"
+)
+
+// CollectionPolicy describes how broadcast replies are collected when ReplyPolicyCollect is set.
+type CollectionPolicy string
+
+const (
+	// WO-82: collector semantics are described in the schema but delivered by later routing WOs.
+	CollectionPolicyNone            CollectionPolicy = "none"
+	CollectionPolicyFirst           CollectionPolicy = "first"
+	CollectionPolicyAllUntilTimeout CollectionPolicy = "all_until_timeout"
+	CollectionPolicyQuorum          CollectionPolicy = "quorum"
+	CollectionPolicyManualReview    CollectionPolicy = "manual_review"
+)
+
 var validMessageTypes = []MessageType{
 	MessageTypeTaskRequest,
 	MessageTypeTaskAccepted,
@@ -95,6 +136,31 @@ var validMessageTypes = []MessageType{
 	MessageTypeAuthorityDirective,
 }
 
+var validVisibilities = []Visibility{
+	VisibilityInband,
+	VisibilityOffband,
+}
+
+var validScopes = []Scope{
+	ScopeTargeted,
+	ScopeBroadcast,
+}
+
+var validReplyPolicies = []ReplyPolicy{
+	ReplyPolicyNone,
+	ReplyPolicyReplyToSender,
+	ReplyPolicyReplyToTarget,
+	ReplyPolicyCollect,
+}
+
+var validCollectionPolicies = []CollectionPolicy{
+	CollectionPolicyNone,
+	CollectionPolicyFirst,
+	CollectionPolicyAllUntilTimeout,
+	CollectionPolicyQuorum,
+	CollectionPolicyManualReview,
+}
+
 // Trace captures provenance for audit and replay.
 type Trace struct {
 	CorrelationID   string          `json:"correlation_id"`
@@ -124,20 +190,26 @@ type Security struct {
 
 // Envelope is the machine-native message unit that moves through the bus.
 type Envelope struct {
-	MessageID      string          `json:"message_id"`
-	ThreadID       string          `json:"thread_id"`
-	From           string          `json:"from"`
-	To             []string        `json:"to,omitempty"`
-	Type           MessageType     `json:"type"`
-	Capability     string          `json:"capability,omitempty"`
-	Payload        json.RawMessage `json:"payload"`
-	ArtifactIDs    []string        `json:"artifact_ids,omitempty"`
-	ReplyTo        string          `json:"reply_to,omitempty"`
-	Deadline       *time.Time      `json:"deadline,omitempty"`
-	SentAt         time.Time       `json:"sent_at"`
-	IdempotencyKey string          `json:"idempotency_key"`
-	Trace          Trace           `json:"trace"`
-	Security       Security        `json:"security"`
+	MessageID        string           `json:"message_id"`
+	ThreadID         string           `json:"thread_id"`
+	From             string           `json:"from"`
+	To               []string         `json:"to,omitempty"`
+	Visibility       Visibility       `json:"visibility,omitempty"` // WO-82: in-band vs off-band pipe selection
+	Scope            Scope            `json:"scope,omitempty"`      // WO-82: targeted vs broadcast route shape
+	Recipient        string           `json:"recipient,omitempty"`  // WO-82: target route recipient when scope is targeted
+	Type             MessageType      `json:"type"`
+	Capability       string           `json:"capability,omitempty"`
+	Payload          json.RawMessage  `json:"payload"`
+	ArtifactIDs      []string         `json:"artifact_ids,omitempty"`
+	ReplyTo          string           `json:"reply_to,omitempty"`
+	ReplyPolicy      ReplyPolicy      `json:"reply_policy,omitempty"`      // WO-82: derived direction/reply mode
+	ReplyTarget      string           `json:"reply_target,omitempty"`      // WO-82: transparent reply redirect target
+	CollectionPolicy CollectionPolicy `json:"collection_policy,omitempty"` // WO-82: broadcast reply collection mode
+	Deadline         *time.Time       `json:"deadline,omitempty"`
+	SentAt           time.Time        `json:"sent_at"`
+	IdempotencyKey   string           `json:"idempotency_key"`
+	Trace            Trace            `json:"trace"`
+	Security         Security         `json:"security"`
 }
 
 // Artifact stores evidence metadata without inlining unbounded blobs into the thread.
@@ -154,7 +226,20 @@ type Artifact struct {
 
 // Validate applies structural checks that must hold before any routing.
 func (e Envelope) Validate() error {
+	return e.validate(true)
+}
+
+// WO-82: SignEnvelope must accept unsigned off-band input before it attaches the required signature.
+func (e Envelope) validateForSigning() error {
+	return e.validate(false)
+}
+
+func (e Envelope) validate(requireOffbandSignature bool) error {
 	if err := e.validateBase(); err != nil {
+		return err
+	}
+
+	if err := e.validateRouting(requireOffbandSignature); err != nil {
 		return err
 	}
 
@@ -175,8 +260,9 @@ func (e Envelope) validateBase() error {
 		return errors.New("from is required")
 	case !slices.Contains(validMessageTypes, e.Type):
 		return fmt.Errorf("unsupported type %q", e.Type)
-	case len(e.To) == 0 && strings.TrimSpace(e.Capability) == "":
-		return errors.New("either to or capability is required")
+	case len(e.To) == 0 && strings.TrimSpace(e.Capability) == "" &&
+		strings.TrimSpace(e.Recipient) == "" && e.Scope == "":
+		return errors.New("either to, recipient, scope, or capability is required")
 	case e.SentAt.IsZero():
 		return errors.New("sent_at is required")
 	case strings.TrimSpace(e.IdempotencyKey) == "":
@@ -226,6 +312,62 @@ func (e Envelope) validateBase() error {
 			return fmt.Errorf("duplicate artifact id %q", artifactID)
 		}
 		seenArtifactIDs[artifactID] = struct{}{}
+	}
+
+	return nil
+}
+
+func (e Envelope) validateRouting(requireOffbandSignature bool) error {
+	if e.Visibility != "" && !slices.Contains(validVisibilities, e.Visibility) {
+		return fmt.Errorf("unsupported visibility %q", e.Visibility)
+	}
+
+	if e.Scope != "" && !slices.Contains(validScopes, e.Scope) {
+		return fmt.Errorf("unsupported scope %q", e.Scope)
+	}
+
+	if e.ReplyPolicy != "" && !slices.Contains(validReplyPolicies, e.ReplyPolicy) {
+		return fmt.Errorf("unsupported reply_policy %q", e.ReplyPolicy)
+	}
+
+	if e.CollectionPolicy != "" && !slices.Contains(validCollectionPolicies, e.CollectionPolicy) {
+		return fmt.Errorf("unsupported collection_policy %q", e.CollectionPolicy)
+	}
+
+	switch e.Scope {
+	case ScopeBroadcast:
+		if strings.TrimSpace(e.Recipient) != "" {
+			return errors.New("recipient must be empty when scope is broadcast")
+		}
+	case ScopeTargeted:
+		if strings.TrimSpace(e.Recipient) == "" {
+			return errors.New("recipient is required when scope is targeted")
+		}
+	}
+
+	if e.ReplyPolicy == ReplyPolicyReplyToTarget && strings.TrimSpace(e.ReplyTarget) == "" {
+		return errors.New("reply_target is required when reply_policy is reply_to_target")
+	}
+
+	if e.ReplyPolicy != ReplyPolicyReplyToTarget && strings.TrimSpace(e.ReplyTarget) != "" {
+		return errors.New("reply_target is only allowed when reply_policy is reply_to_target")
+	}
+
+	if e.ReplyPolicy == ReplyPolicyCollect {
+		if e.CollectionPolicy == "" || e.CollectionPolicy == CollectionPolicyNone {
+			return errors.New("collection_policy is required when reply_policy is collect")
+		}
+	} else if e.CollectionPolicy != "" && e.CollectionPolicy != CollectionPolicyNone {
+		return errors.New("collection_policy is only allowed when reply_policy is collect")
+	}
+
+	if e.Visibility == VisibilityOffband && requireOffbandSignature {
+		if !e.Security.Signed {
+			return errors.New("security.signed is required for offband envelopes")
+		}
+		if strings.TrimSpace(e.Security.Signature) == "" {
+			return errors.New("security.signature is required for offband envelopes")
+		}
 	}
 
 	return nil

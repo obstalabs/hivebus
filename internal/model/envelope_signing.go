@@ -28,7 +28,8 @@ func SignEnvelope(envelope Envelope, privateKey ed25519.PrivateKey) (Envelope, e
 	if err := validateEd25519Envelope(envelope); err != nil {
 		return Envelope{}, err
 	}
-	if err := envelope.Validate(); err != nil {
+	// WO-82: off-band envelopes are unsigned until this function attaches the signature.
+	if err := envelope.validateForSigning(); err != nil {
 		return Envelope{}, err
 	}
 
