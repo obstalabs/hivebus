@@ -4,6 +4,7 @@
 
 ### Added
 
+- `hivebus ask` read-only query/answer primitive for signed direct agent questions.
 - Signed envelope schema primitives for query, answer, request, and authority directive messages.
 - Typed NeuroRouter agent-run lifecycle envelopes (`nr.run.*`) — hivebus as receipts substrate for governed runs.
 
