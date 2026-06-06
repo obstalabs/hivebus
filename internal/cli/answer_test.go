@@ -396,6 +396,27 @@ func TestAnswerCommandPrintPublicKeyExitsWithoutLoop(t *testing.T) {
 	}
 }
 
+func TestAnswerCommandPrintPublicKeyRequiresSigningKey(t *testing.T) {
+	cmd := newAnswerCommand()
+	cmd.SetArgs([]string{"--print-public-key"})
+
+	var output bytes.Buffer
+	var logs bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&logs)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("answer command succeeded, want signing-key error")
+	}
+	if !strings.Contains(err.Error(), "--signing-key is required with --print-public-key") {
+		t.Fatalf("error = %q, want signing-key requirement", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", output.String())
+	}
+}
+
 func TestAnswerPublicKeyFileRoundTripWithAsk(t *testing.T) {
 	publicKey, privateKey := deterministicAskSigningKey(72)
 	publicKeyFile := filepath.Join(t.TempDir(), "keys", "answer.pub")

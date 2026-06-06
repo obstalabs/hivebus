@@ -204,6 +204,9 @@ func newAnswerCommand() *cobra.Command {
 		Use:   "answer --agent <id> --server <url>",
 		Short: "Run a conservative signed answerer loop",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if options.printPublicKey && strings.TrimSpace(options.signingKey) == "" {
+				cmd.SilenceUsage = true // WO-112: missing-key print mode must not write usage or a random key to stdout.
+			}
 			return runAnswer(
 				cmd.Context(),
 				cmd.OutOrStdout(),
@@ -255,6 +258,9 @@ func runAnswer(
 ) error {
 	options.normalize()
 	if options.printPublicKey {
+		if strings.TrimSpace(options.signingKey) == "" {
+			return errors.New("--signing-key is required with --print-public-key") // WO-112: avoid printing a random key that no answerer can reuse.
+		}
 		publicKey, _, err := answerSigningKey(options.signingKey, deps.randomReader())
 		if err != nil {
 			return err

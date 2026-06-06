@@ -15,9 +15,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// WO-108: unit tests dispatch watch requests in-process under restricted networking.
-var watchHTTPClient askHTTPDoer = &http.Client{Timeout: 0}
-
 func newWatchCommand() *cobra.Command {
 	var addr string
 	var token string
@@ -50,6 +47,21 @@ func runWatch(
 	token string,
 	lastEventID string,
 ) error {
+	return runWatchWithClient(ctx, out, &http.Client{}, addr, threadID, token, lastEventID)
+}
+
+func runWatchWithClient(
+	ctx context.Context,
+	out io.Writer,
+	client askHTTPDoer,
+	addr string,
+	threadID string,
+	token string,
+	lastEventID string,
+) error {
+	if client == nil {
+		client = &http.Client{} // WO-113: keep tests scoped without a mutable package-global client hook.
+	}
 	if strings.TrimSpace(threadID) == "" {
 		return errors.New("thread id is required")
 	}
@@ -71,7 +83,7 @@ func runWatch(
 		req.Header.Set("Last-Event-ID", strings.TrimSpace(lastEventID))
 	}
 
-	resp, err := watchHTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
