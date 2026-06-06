@@ -586,6 +586,19 @@ func validateLiveAskAnswer(
 	if answer.ThreadID != query.ThreadID {
 		return fmt.Errorf("answer thread_id = %q, want %q", answer.ThreadID, query.ThreadID)
 	}
+	// WO-101: bind signature-verified answers to this targeted ask route.
+	if len(query.To) != 1 {
+		return fmt.Errorf("query target count = %d, want 1", len(query.To))
+	}
+	if answer.From != query.To[0] {
+		return fmt.Errorf("answer from = %q, want %q", answer.From, query.To[0])
+	}
+	if len(answer.To) != 1 {
+		return fmt.Errorf("answer to count = %d, want 1 recipient %q", len(answer.To), query.From)
+	}
+	if answer.To[0] != query.From {
+		return fmt.Errorf("answer to = %q, want %q", answer.To[0], query.From)
+	}
 	if answer.Deadline != nil && now.After(*answer.Deadline) {
 		return errors.New("answer is expired")
 	}
@@ -621,11 +634,15 @@ func validateAskQueryReadOnly(envelope model.Envelope) error {
 }
 
 func decodeAskInboxAnswers(data []byte) ([]model.Envelope, error) {
-	return decodeAskInboxAnswersDepth(data, 0)
+	return decodeAskInboxAnswersDepth(data, 0, true)
 }
 
-func decodeAskInboxAnswersDepth(data []byte, depth int) ([]model.Envelope, error) {
+// WO-100: keep the top-level inbox contract strict but tolerate stale nested bodies.
+func decodeAskInboxAnswersDepth(data []byte, depth int, strict bool) ([]model.Envelope, error) {
 	if depth > 4 {
+		if !strict {
+			return nil, nil
+		}
 		return nil, errors.New("live ask inbox nesting is too deep")
 	}
 
@@ -656,9 +673,10 @@ func decodeAskInboxAnswersDepth(data []byte, depth int) ([]model.Envelope, error
 	if err := json.Unmarshal(data, &rawList); err == nil {
 		var answers []model.Envelope
 		for _, raw := range rawList {
-			nested, err := decodeAskInboxAnswersDepth(raw, depth+1)
+			nested, err := decodeAskInboxAnswersDepth(raw, depth+1, false)
 			if err != nil {
-				return nil, err
+				// WO-100: stale queue entries may not be ask envelopes; keep scanning.
+				continue
 			}
 			answers = append(answers, nested...)
 		}
@@ -668,6 +686,9 @@ func decodeAskInboxAnswersDepth(data []byte, depth int) ([]model.Envelope, error
 
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(data, &object); err != nil {
+		if !strict {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("live ask inbox must be json: %w", err)
 	}
 
@@ -677,9 +698,12 @@ func decodeAskInboxAnswersDepth(data []byte, depth int) ([]model.Envelope, error
 		if !exists {
 			continue
 		}
-		nested, err := decodeAskInboxAnswersDepth(raw, depth+1)
+		nested, err := decodeAskInboxAnswersDepth(raw, depth+1, false)
 		if err != nil {
-			return nil, err
+			if strict {
+				return nil, err
+			}
+			continue
 		}
 		answers = append(answers, nested...)
 	}
@@ -691,11 +715,17 @@ func decodeAskInboxAnswersDepth(data []byte, depth int) ([]model.Envelope, error
 		}
 		var body string
 		if err := json.Unmarshal(raw, &body); err != nil {
-			return nil, fmt.Errorf("live ask inbox body must be a string: %w", err)
+			if strict {
+				return nil, fmt.Errorf("live ask inbox body must be a string: %w", err)
+			}
+			continue
 		}
-		nested, err := decodeAskInboxAnswersDepth([]byte(body), depth+1)
+		nested, err := decodeAskInboxAnswersDepth([]byte(body), depth+1, false)
 		if err != nil {
-			return nil, err
+			if strict {
+				return nil, err
+			}
+			continue
 		}
 		answers = append(answers, nested...)
 	}
@@ -705,9 +735,12 @@ func decodeAskInboxAnswersDepth(data []byte, depth int) ([]model.Envelope, error
 		if !exists {
 			continue
 		}
-		nested, err := decodeAskInboxAnswersDepth(raw, depth+1)
+		nested, err := decodeAskInboxAnswersDepth(raw, depth+1, false)
 		if err != nil {
-			return nil, err
+			if strict {
+				return nil, err
+			}
+			continue
 		}
 		answers = append(answers, nested...)
 	}

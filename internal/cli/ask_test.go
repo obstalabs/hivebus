@@ -245,6 +245,79 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 	}
 }
 
+func TestAskCommandSkipsMalformedUnrelatedInboxMessages(t *testing.T) {
+	// WO-100: stale malformed queue entries must not hide a later correlated answer.
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(14)
+	var sentQuery model.Envelope
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
+			var request askSendAgentMessageRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatalf("Decode(send request) error = %v", err)
+			}
+			if err := json.Unmarshal([]byte(request.Body), &sentQuery); err != nil {
+				t.Fatalf("Unmarshal(query body) error = %v", err)
+			}
+			writeJSONResponse(t, w, askSendAgentMessageResponse{Status: "queued"})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/inbox"):
+			answer := signLiveAskAnswer(
+				t,
+				sentQuery,
+				json.RawMessage(`{"answer":"live answer after stale message","answered_by":"workledger/agent","question_type":"direct","read_only":true}`),
+				answerPrivateKey,
+			)
+			answerBody, err := json.Marshal(answer)
+			if err != nil {
+				t.Fatalf("Marshal(answer) error = %v", err)
+			}
+			writeJSONResponse(t, w, map[string]any{
+				"messages": []map[string]any{
+					{
+						"message": map[string]string{
+							"message_id": "stale-non-envelope",
+							"body":       "not-json and not an envelope",
+						},
+					},
+					{
+						"message": map[string]string{
+							"message_id": "answer-live",
+							"body":       string(answerBody),
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cmd := newAskCommand()
+	cmd.SetArgs([]string{
+		"--server", server.URL,
+		"--to", "workledger/agent",
+		"--session-id", "asker-session",
+		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
+		"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
+	})
+	cmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))
+
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("ask command error = %v", err)
+	}
+	if !strings.Contains(output.String(), "live answer after stale message") {
+		t.Fatalf("ask output = %s, want valid answer after malformed stale body", output.String())
+	}
+}
+
 func TestAskCommandRejectsLiveAskWithoutRuntimeSessionAuth(t *testing.T) {
 	answerPublicKey, _ := deterministicAskSigningKey(12)
 	validOptions := askOptions{
@@ -434,6 +507,82 @@ func TestAskCommandRejectsUnverifiedLiveAnswer(t *testing.T) {
 	}
 }
 
+func TestValidateLiveAskAnswerRejectsWrongRoute(t *testing.T) {
+	// WO-101: cryptographic validity is not enough without route coherence.
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(15)
+	query, err := buildSignedAskQuery(
+		askOptions{from: "architect/agent", to: "workledger/agent", questionType: "direct"},
+		"who owns this?",
+		fixedAskTime(),
+		mustAskPrivateKey(t, 16),
+		newCountingReader(),
+	)
+	if err != nil {
+		t.Fatalf("buildSignedAskQuery() error = %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		from      string
+		to        []string
+		recipient string
+		wantErr   string
+	}{
+		{
+			name:    "wrong_from",
+			from:    "other/agent",
+			to:      []string{"architect/agent"},
+			wantErr: "answer from",
+		},
+		{
+			name:      "missing_to",
+			from:      "workledger/agent",
+			to:        nil,
+			recipient: "architect/agent",
+			wantErr:   "answer to",
+		},
+		{
+			name:    "multiple_to",
+			from:    "workledger/agent",
+			to:      []string{"architect/agent", "other/agent"},
+			wantErr: "answer to",
+		},
+		{
+			name:    "wrong_to",
+			from:    "workledger/agent",
+			to:      []string{"other/agent"},
+			wantErr: "answer to",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			answer := signLiveAskAnswerWithRoute(
+				t,
+				query,
+				json.RawMessage(`{"answer":"route mismatch","answered_by":"workledger/agent","question_type":"direct","read_only":true}`),
+				test.from,
+				test.to,
+				test.recipient,
+				answerPrivateKey,
+			)
+
+			err := validateLiveAskAnswer(query, answer, answerPublicKey, fixedAskTime().Add(askAnswerDelay))
+			if err == nil {
+				t.Fatal("validateLiveAskAnswer() expected route error")
+			}
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("validateLiveAskAnswer() error = %q, want %q", err, test.wantErr)
+			}
+			if strings.Contains(err.Error(), "signature verification") {
+				t.Fatalf("validateLiveAskAnswer() error = %q, want route failure not signature failure", err)
+			}
+		})
+	}
+}
+
 func TestAskCommandSurfacesUnsupportedQueryClassAnswer(t *testing.T) {
 	withDeterministicAskRuntime(t)
 
@@ -589,6 +738,13 @@ func deterministicAskSigningKey(seedByte byte) (ed25519.PublicKey, ed25519.Priva
 	return privateKey.Public().(ed25519.PublicKey), privateKey
 }
 
+func mustAskPrivateKey(t *testing.T, seedByte byte) ed25519.PrivateKey {
+	t.Helper()
+
+	_, privateKey := deterministicAskSigningKey(seedByte)
+	return privateKey
+}
+
 func signLiveAskAnswer(
 	t *testing.T,
 	query model.Envelope,
@@ -597,11 +753,26 @@ func signLiveAskAnswer(
 ) model.Envelope {
 	t.Helper()
 
+	return signLiveAskAnswerWithRoute(t, query, payload, "workledger/agent", []string{query.From}, "", privateKey)
+}
+
+func signLiveAskAnswerWithRoute(
+	t *testing.T,
+	query model.Envelope,
+	payload json.RawMessage,
+	from string,
+	to []string,
+	recipient string,
+	privateKey ed25519.PrivateKey,
+) model.Envelope {
+	t.Helper()
+
 	answer := model.Envelope{
 		MessageID:      "answer-live",
 		ThreadID:       query.ThreadID,
-		From:           "workledger/agent",
-		To:             []string{query.From},
+		From:           from,
+		To:             append([]string(nil), to...),
+		Recipient:      recipient,
 		Type:           model.MessageTypeAnswer,
 		Payload:        payload,
 		ReplyTo:        query.MessageID,
