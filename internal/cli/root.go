@@ -27,7 +27,8 @@ work-order derivation as typed JSON threads instead of ad hoc text blobs.`,
 	cmd.AddCommand(newVersionCommand())
 	cmd.AddCommand(newSpecCommand())
 	cmd.AddCommand(newSampleCommand())
-	cmd.AddCommand(newAskCommand()) // WO-84: signed read-only query/answer primitive.
+	cmd.AddCommand(newAskCommand())    // WO-84: signed read-only query/answer primitive.
+	cmd.AddCommand(newAnswerCommand()) // WO-95: conservative registered answerer loop.
 	cmd.AddCommand(newServeCommand())
 	cmd.AddCommand(newWatchCommand())
 

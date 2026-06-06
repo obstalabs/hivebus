@@ -63,9 +63,10 @@ type askExchange struct {
 
 // WO-84: query payload has no requested_action or executable field by construction.
 type askQueryPayload struct {
-	Question     string `json:"question"`
-	QuestionType string `json:"question_type"`
-	ReadOnly     bool   `json:"read_only"`
+	Question       string `json:"question"`
+	QuestionType   string `json:"question_type"`
+	ReadOnly       bool   `json:"read_only"`
+	QueryPublicKey string `json:"query_public_key,omitempty"` // WO-95: answerers need the signed query's verification key in-band.
 }
 
 // WO-84: answer payload is bounded metadata from the warm-context fixture receiver.
@@ -293,9 +294,10 @@ func buildSignedAskQuery(
 	random io.Reader,
 ) (model.Envelope, error) {
 	payload, err := json.Marshal(askQueryPayload{
-		Question:     question,
-		QuestionType: options.questionType,
-		ReadOnly:     true,
+		Question:       question,
+		QuestionType:   options.questionType,
+		ReadOnly:       true,
+		QueryPublicKey: base64.StdEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey)),
 	})
 	if err != nil {
 		return model.Envelope{}, err
