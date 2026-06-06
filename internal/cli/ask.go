@@ -49,6 +49,7 @@ type askOptions struct {
 	operatorToken   string
 	workerToken     string // WO-98: RoleWorker bearer token for live ask inbox reads.
 	answerPublicKey string
+	insecure        bool // WO-104: allow tokenless live ask against a serve --auth-disabled server.
 }
 
 // WO-84: askExchange is the local fixture transport for the first ask->answer slice.
@@ -173,6 +174,7 @@ func newAskCommand() *cobra.Command {
 		"",
 		"base64 ed25519 public key expected to sign the answer",
 	) // WO-94: verify answer provenance before trusting delivery.
+	cmd.Flags().BoolVar(&options.insecure, "insecure", false, "allow tokenless live ask against a serve --auth-disabled server") // WO-104: match serve --auth-disabled on the dogfood path.
 
 	return cmd
 }
@@ -910,10 +912,10 @@ func (options askOptions) validate() error {
 		return errors.New("poll-interval must be non-negative")
 	case options.useLiveDelivery() && options.sessionID == "":
 		return errors.New("session-id is required for live ask inbox polling")
-	case options.useLiveDelivery() && options.operatorToken == "":
-		return errors.New("operator-token is required for live ask send")
-	case options.useLiveDelivery() && options.workerToken == "":
-		return errors.New("worker-token is required for live ask inbox polling")
+	case options.useLiveDelivery() && !options.insecure && options.operatorToken == "":
+		return errors.New("operator-token is required for live ask send (or pass --insecure for a serve --auth-disabled server)")
+	case options.useLiveDelivery() && !options.insecure && options.workerToken == "":
+		return errors.New("worker-token is required for live ask inbox polling (or pass --insecure for a serve --auth-disabled server)")
 	case options.useLiveDelivery() && options.answerPublicKey == "":
 		return errors.New("answer-public-key is required for live ask verification")
 	default:

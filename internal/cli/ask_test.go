@@ -372,6 +372,45 @@ func TestAskCommandRejectsLiveAskWithoutRuntimeSessionAuth(t *testing.T) {
 	}
 }
 
+// WO-104: --insecure relaxes the token requirement so the dogfood path matches a
+// serve --auth-disabled server, but session-id and answer-public-key stay required.
+func TestAskCommandInsecureAllowsTokenlessLiveAsk(t *testing.T) {
+	answerPublicKey, _ := deterministicAskSigningKey(12)
+	base := askOptions{
+		from:            "architect/agent",
+		to:              "workledger/agent",
+		questionType:    "canonical_repo",
+		serverURL:       "http://127.0.0.1:8080",
+		timeout:         defaultAskLiveTimeout,
+		pollInterval:    defaultAskPollInterval,
+		sessionID:       "asker-session",
+		answerPublicKey: base64.StdEncoding.EncodeToString(answerPublicKey),
+		insecure:        true,
+	}
+
+	if err := base.validate(); err != nil {
+		t.Fatalf("insecure tokenless validate() error = %v, want nil", err)
+	}
+
+	withToken := base
+	withToken.operatorToken = "operator-token"
+	if err := withToken.validate(); err != nil {
+		t.Fatalf("insecure with token validate() error = %v, want nil", err)
+	}
+
+	missingSession := base
+	missingSession.sessionID = ""
+	if err := missingSession.validate(); err == nil || !strings.Contains(err.Error(), "session-id is required") {
+		t.Fatalf("insecure missing session validate() error = %v, want session-id required", err)
+	}
+
+	missingKey := base
+	missingKey.answerPublicKey = ""
+	if err := missingKey.validate(); err == nil || !strings.Contains(err.Error(), "answer-public-key is required") {
+		t.Fatalf("insecure missing answer-public-key validate() error = %v, want answer-public-key required", err)
+	}
+}
+
 func TestAskCommandLiveSendResponseObjectStillFailsRejectedStatus(t *testing.T) {
 	withDeterministicAskRuntime(t)
 
