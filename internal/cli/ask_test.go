@@ -834,6 +834,98 @@ func TestAskCommandRejectsUnverifiedLiveAnswer(t *testing.T) {
 	}
 }
 
+func TestAskCommandPrefersValidAnswerOverEarlierUnverifiedCandidate(t *testing.T) {
+	// WO-110: a bad candidate in the same inbox batch must not mask a later valid answer.
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(27)
+	_, wrongAnswerPrivateKey := deterministicAskSigningKey(28)
+	var sentQuery model.Envelope
+
+	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
+			var request askSendAgentMessageRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatalf("Decode(send request) error = %v", err)
+			}
+			if err := json.Unmarshal([]byte(request.Body), &sentQuery); err != nil {
+				t.Fatalf("Unmarshal(query body) error = %v", err)
+			}
+			writeJSONResponse(t, w, askSendAgentMessageResponse{Status: "accepted"})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/inbox"):
+			forged := signLiveAskAnswer(
+				t,
+				sentQuery,
+				json.RawMessage(`{"answer":"forged","answered_by":"workledger/agent","question_type":"direct","read_only":true}`),
+				wrongAnswerPrivateKey,
+			)
+			trusted := signLiveAskAnswer(
+				t,
+				sentQuery,
+				json.RawMessage(`{"answer":"trusted","answered_by":"workledger/agent","question_type":"direct","read_only":true}`),
+				answerPrivateKey,
+			)
+			forgedBody, err := json.Marshal(forged)
+			if err != nil {
+				t.Fatalf("Marshal(forged answer) error = %v", err)
+			}
+			trustedBody, err := json.Marshal(trusted)
+			if err != nil {
+				t.Fatalf("Marshal(trusted answer) error = %v", err)
+			}
+			writeJSONResponse(t, w, map[string][]map[string]string{
+				"messages": {
+					{"body": string(forgedBody)},
+					{"body": string(trustedBody)},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+
+	cmd := newAskCommand()
+	cmd.SetArgs([]string{
+		"--server", serverURL,
+		"--to", "workledger/agent",
+		"--session-id", "asker-session",
+		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
+		"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
+	})
+	cmd.SetIn(strings.NewReader("who owns this?\n"))
+
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("ask command error = %v", err)
+	}
+	var exchange askExchange
+	if err := json.Unmarshal(output.Bytes(), &exchange); err != nil {
+		t.Fatalf("json.Unmarshal() exchange error = %v", err)
+	}
+	if !exchange.Delivered {
+		t.Fatal("delivered = false, want true")
+	}
+	if exchange.Answers != 1 {
+		t.Fatalf("answers = %d, want 1", exchange.Answers)
+	}
+	if exchange.ResponseStatus != askResponseStatusAnswered {
+		t.Fatalf("response_status = %q, want %q", exchange.ResponseStatus, askResponseStatusAnswered)
+	}
+	if exchange.VerificationError != "" {
+		t.Fatalf("verification_error = %q, want empty", exchange.VerificationError)
+	}
+	if !strings.Contains(output.String(), "trusted") {
+		t.Fatalf("ask output = %s, want trusted answer", output.String())
+	}
+	if strings.Contains(output.String(), "forged") {
+		t.Fatalf("ask output = %s, want forged answer withheld", output.String())
+	}
+}
+
 func TestValidateLiveAskAnswerRejectsWrongRoute(t *testing.T) {
 	// WO-101: cryptographic validity is not enough without route coherence.
 	withDeterministicAskRuntime(t)

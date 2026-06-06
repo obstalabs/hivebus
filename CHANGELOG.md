@@ -16,6 +16,7 @@
 ### Changed
 
 - `hivebus ask --server` now exits 0 for delivered queries with no trusted answer and reports `delivered=true`, `answers=0`; delivery failures still exit non-zero.
+- `hivebus ask --server` now prefers a later valid signed answer over an earlier unverified candidate in the same inbox batch.
 
 ## [0.2.0] - 2026-04-20
 

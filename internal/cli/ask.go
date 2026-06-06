@@ -614,6 +614,7 @@ func (transport askLiveTransport) awaitAnswer(
 	now := transport.clock()
 	deadline := now().Add(options.timeout)
 	maxPolls := askMaxLivePolls(options.timeout, options.pollInterval)
+	var verificationError string
 
 	for attempt := 0; ; attempt++ {
 		answers, err := transport.fetchInboxAnswers(options.sessionID)
@@ -625,16 +626,25 @@ func (transport askLiveTransport) awaitAnswer(
 				continue
 			}
 			if err := validateLiveAskAnswer(query, answer, answerPublicKey, now()); err != nil {
-				return askAnswerWaitResult{VerificationError: err.Error()}, nil
+				if verificationError == "" {
+					verificationError = err.Error()
+				}
+				continue
 			}
 
 			return askAnswerWaitResult{Answer: answer, Found: true}, nil
 		}
 
 		if !now().Before(deadline) || attempt+1 >= maxPolls {
+			if verificationError != "" {
+				return askAnswerWaitResult{VerificationError: verificationError}, nil
+			}
 			return askAnswerWaitResult{}, nil
 		}
 		if options.pollInterval <= 0 {
+			if verificationError != "" {
+				return askAnswerWaitResult{VerificationError: verificationError}, nil
+			}
 			return askAnswerWaitResult{}, nil
 		}
 		transport.sleeper()(options.pollInterval)
