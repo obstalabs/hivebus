@@ -615,6 +615,34 @@ func TestValidateLiveAskAnswerAcceptsCanonicalTargetedRecipient(t *testing.T) {
 	}
 }
 
+func TestValidateLiveAskAnswerAcceptsCanonicalTargetedQueryRecipient(t *testing.T) {
+	// WO-105: canonical targeted queries may identify the target without legacy To.
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(21)
+	query := signTargetedLiveAskQuery(
+		t,
+		"architect/agent",
+		nil,
+		"workledger/agent",
+		mustAskPrivateKey(t, 22),
+	)
+	answer := signLiveAskAnswerWithRouteAndScope(
+		t,
+		query,
+		json.RawMessage(`{"answer":"canonical query route","answered_by":"workledger/agent","question_type":"direct","read_only":true}`),
+		"workledger/agent",
+		nil,
+		"architect/agent",
+		model.ScopeTargeted,
+		answerPrivateKey,
+	)
+
+	if err := validateLiveAskAnswer(query, answer, answerPublicKey, fixedAskTime().Add(askAnswerDelay)); err != nil {
+		t.Fatalf("validateLiveAskAnswer() error = %v", err)
+	}
+}
+
 func TestValidateLiveAskAnswerRejectsCanonicalRecipientRouteMismatch(t *testing.T) {
 	// WO-102: signed canonical recipient fields are part of answer route trust.
 	withDeterministicAskRuntime(t)
@@ -685,6 +713,70 @@ func TestValidateLiveAskAnswerRejectsCanonicalRecipientRouteMismatch(t *testing.
 			answer := test.mutate(validAnswer)
 
 			err := validateLiveAskAnswer(query, answer, answerPublicKey, fixedAskTime().Add(askAnswerDelay))
+			if err == nil {
+				t.Fatal("validateLiveAskAnswer() expected route error")
+			}
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("validateLiveAskAnswer() error = %q, want %q", err, test.wantErr)
+			}
+			if strings.Contains(err.Error(), "signature verification") {
+				t.Fatalf("validateLiveAskAnswer() error = %q, want route failure not signature failure", err)
+			}
+		})
+	}
+}
+
+func TestValidateLiveAskAnswerRejectsCanonicalQueryRouteMismatch(t *testing.T) {
+	// WO-105: query route coherence is checked before answer signature errors.
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(23)
+	validQuery := signTargetedLiveAskQuery(
+		t,
+		"architect/agent",
+		nil,
+		"workledger/agent",
+		mustAskPrivateKey(t, 24),
+	)
+	validAnswer := signLiveAskAnswerWithRouteAndScope(
+		t,
+		validQuery,
+		json.RawMessage(`{"answer":"canonical query route mismatch","answered_by":"workledger/agent","question_type":"direct","read_only":true}`),
+		"workledger/agent",
+		nil,
+		"architect/agent",
+		model.ScopeTargeted,
+		answerPrivateKey,
+	)
+
+	tests := []struct {
+		name    string
+		mutate  func(model.Envelope) model.Envelope
+		wantErr string
+	}{
+		{
+			name: "missing_recipient",
+			mutate: func(query model.Envelope) model.Envelope {
+				query.Recipient = ""
+				return query
+			},
+			wantErr: "query recipient",
+		},
+		{
+			name: "legacy_to_mirror_mismatch",
+			mutate: func(query model.Envelope) model.Envelope {
+				query.To = []string{"other/agent"}
+				return query
+			},
+			wantErr: "query to",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			query := test.mutate(validQuery)
+
+			err := validateLiveAskAnswer(query, validAnswer, answerPublicKey, fixedAskTime().Add(askAnswerDelay))
 			if err == nil {
 				t.Fatal("validateLiveAskAnswer() expected route error")
 			}
@@ -858,6 +950,46 @@ func mustAskPrivateKey(t *testing.T, seedByte byte) ed25519.PrivateKey {
 
 	_, privateKey := deterministicAskSigningKey(seedByte)
 	return privateKey
+}
+
+func signTargetedLiveAskQuery(
+	t *testing.T,
+	from string,
+	to []string,
+	recipient string,
+	privateKey ed25519.PrivateKey,
+) model.Envelope {
+	t.Helper()
+
+	// WO-105: build canonical targeted queries without exercising the legacy builder.
+	query := model.Envelope{
+		MessageID:      "query-targeted-live",
+		ThreadID:       "thread-targeted-live",
+		From:           from,
+		To:             append([]string(nil), to...),
+		Scope:          model.ScopeTargeted,
+		Recipient:      recipient,
+		Type:           model.MessageTypeQuery,
+		Payload:        json.RawMessage(`{"question":"who owns this?","question_type":"direct","read_only":true}`),
+		SentAt:         fixedAskTime(),
+		IdempotencyKey: "idem-query-targeted-live",
+		Trace: model.Trace{
+			CorrelationID:   "corr-targeted-live",
+			Verified:        true,
+			PromotionStatus: model.PromotionStatusPassed,
+		},
+		Security: model.Security{
+			Scheme: model.SecuritySchemeEd25519,
+			Nonce:  "nonce-query-targeted-live",
+		},
+	}
+
+	signed, err := model.SignEnvelope(query, privateKey)
+	if err != nil {
+		t.Fatalf("SignEnvelope(query) error = %v", err)
+	}
+
+	return signed
 }
 
 func signLiveAskAnswer(
