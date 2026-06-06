@@ -574,9 +574,6 @@ func validateLiveAskAnswer(
 	answerPublicKey ed25519.PublicKey,
 	now time.Time,
 ) error {
-	if err := model.VerifyEnvelope(answer, answerPublicKey); err != nil {
-		return fmt.Errorf("answer signature verification failed: %w", err)
-	}
 	if answer.Type != model.MessageTypeAnswer {
 		return fmt.Errorf("answer type = %q, want %q", answer.Type, model.MessageTypeAnswer)
 	}
@@ -586,24 +583,89 @@ func validateLiveAskAnswer(
 	if answer.ThreadID != query.ThreadID {
 		return fmt.Errorf("answer thread_id = %q, want %q", answer.ThreadID, query.ThreadID)
 	}
-	// WO-101: bind signature-verified answers to this targeted ask route.
-	if len(query.To) != 1 {
-		return fmt.Errorf("query target count = %d, want 1", len(query.To))
+	if err := validateLiveAskAnswerRoute(query, answer); err != nil {
+		return err
 	}
-	if answer.From != query.To[0] {
-		return fmt.Errorf("answer from = %q, want %q", answer.From, query.To[0])
-	}
-	if len(answer.To) != 1 {
-		return fmt.Errorf("answer to count = %d, want 1 recipient %q", len(answer.To), query.From)
-	}
-	if answer.To[0] != query.From {
-		return fmt.Errorf("answer to = %q, want %q", answer.To[0], query.From)
+	if err := model.VerifyEnvelope(answer, answerPublicKey); err != nil {
+		return fmt.Errorf("answer signature verification failed: %w", err)
 	}
 	if answer.Deadline != nil && now.After(*answer.Deadline) {
 		return errors.New("answer is expired")
 	}
 
 	return nil
+}
+
+func validateLiveAskAnswerRoute(query model.Envelope, answer model.Envelope) error {
+	target, err := liveAskQueryTarget(query)
+	if err != nil {
+		return err
+	}
+	// WO-101: bind signed answers to this targeted ask route.
+	if answer.From != target {
+		return fmt.Errorf("answer from = %q, want %q", answer.From, target)
+	}
+	// WO-102: canonical targeted routing may replace the legacy answer.to mirror.
+	if answer.Scope == model.ScopeTargeted {
+		if answer.Recipient == "" {
+			return errors.New("answer recipient is required for targeted route")
+		}
+		if answer.Recipient != query.From {
+			return fmt.Errorf("answer recipient = %q, want %q", answer.Recipient, query.From)
+		}
+		if len(answer.To) > 1 {
+			return fmt.Errorf("answer to count = %d, want 0 or 1 mirror recipient %q", len(answer.To), answer.Recipient)
+		}
+		if len(answer.To) == 1 && answer.To[0] != answer.Recipient {
+			return fmt.Errorf("answer to = %q, want recipient %q", answer.To[0], answer.Recipient)
+		}
+
+		return nil
+	}
+	if answer.Scope != "" {
+		return fmt.Errorf("answer scope = %q, want %q", answer.Scope, model.ScopeTargeted)
+	}
+	// WO-101: preserve the legacy single-To route contract.
+	if len(answer.To) != 1 {
+		return fmt.Errorf("answer to count = %d, want 1 recipient %q", len(answer.To), query.From)
+	}
+	if answer.To[0] != query.From {
+		return fmt.Errorf("answer to = %q, want %q", answer.To[0], query.From)
+	}
+	if answer.Recipient != "" && answer.Recipient != query.From {
+		return fmt.Errorf("answer recipient = %q, want %q", answer.Recipient, query.From)
+	}
+
+	return nil
+}
+
+func liveAskQueryTarget(query model.Envelope) (string, error) {
+	// WO-102: prefer canonical targeted query recipient when present.
+	if query.Scope == model.ScopeTargeted {
+		if query.Recipient == "" {
+			return "", errors.New("query recipient is required for targeted route")
+		}
+		if len(query.To) > 1 {
+			return "", fmt.Errorf("query to count = %d, want 0 or 1 mirror recipient %q", len(query.To), query.Recipient)
+		}
+		if len(query.To) == 1 && query.To[0] != query.Recipient {
+			return "", fmt.Errorf("query to = %q, want recipient %q", query.To[0], query.Recipient)
+		}
+
+		return query.Recipient, nil
+	}
+	if query.Scope != "" {
+		return "", fmt.Errorf("query scope = %q, want %q", query.Scope, model.ScopeTargeted)
+	}
+	// WO-101: legacy live ask is still a single targeted recipient.
+	if len(query.To) != 1 {
+		return "", fmt.Errorf("query target count = %d, want 1", len(query.To))
+	}
+	if query.Recipient != "" && query.Recipient != query.To[0] {
+		return "", fmt.Errorf("query recipient = %q, want %q", query.Recipient, query.To[0])
+	}
+
+	return query.To[0], nil
 }
 
 func validateAskQueryReadOnly(envelope model.Envelope) error {

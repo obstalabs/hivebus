@@ -583,6 +583,121 @@ func TestValidateLiveAskAnswerRejectsWrongRoute(t *testing.T) {
 	}
 }
 
+func TestValidateLiveAskAnswerAcceptsCanonicalTargetedRecipient(t *testing.T) {
+	// WO-102: canonical targeted answers may address the asker via Recipient.
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(17)
+	query, err := buildSignedAskQuery(
+		askOptions{from: "architect/agent", to: "workledger/agent", questionType: "direct"},
+		"who owns this?",
+		fixedAskTime(),
+		mustAskPrivateKey(t, 18),
+		newCountingReader(),
+	)
+	if err != nil {
+		t.Fatalf("buildSignedAskQuery() error = %v", err)
+	}
+
+	answer := signLiveAskAnswerWithRouteAndScope(
+		t,
+		query,
+		json.RawMessage(`{"answer":"canonical route","answered_by":"workledger/agent","question_type":"direct","read_only":true}`),
+		"workledger/agent",
+		nil,
+		"architect/agent",
+		model.ScopeTargeted,
+		answerPrivateKey,
+	)
+
+	if err := validateLiveAskAnswer(query, answer, answerPublicKey, fixedAskTime().Add(askAnswerDelay)); err != nil {
+		t.Fatalf("validateLiveAskAnswer() error = %v", err)
+	}
+}
+
+func TestValidateLiveAskAnswerRejectsCanonicalRecipientRouteMismatch(t *testing.T) {
+	// WO-102: signed canonical recipient fields are part of answer route trust.
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(19)
+	query, err := buildSignedAskQuery(
+		askOptions{from: "architect/agent", to: "workledger/agent", questionType: "direct"},
+		"who owns this?",
+		fixedAskTime(),
+		mustAskPrivateKey(t, 20),
+		newCountingReader(),
+	)
+	if err != nil {
+		t.Fatalf("buildSignedAskQuery() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(model.Envelope) model.Envelope
+		wantErr string
+	}{
+		{
+			name: "wrong_recipient",
+			mutate: func(answer model.Envelope) model.Envelope {
+				return signLiveAskAnswerWithRouteAndScope(
+					t,
+					query,
+					answer.Payload,
+					"workledger/agent",
+					nil,
+					"other/agent",
+					model.ScopeTargeted,
+					answerPrivateKey,
+				)
+			},
+			wantErr: "answer recipient",
+		},
+		{
+			name: "missing_recipient",
+			mutate: func(answer model.Envelope) model.Envelope {
+				answer.Recipient = ""
+				return answer
+			},
+			wantErr: "answer recipient",
+		},
+		{
+			name: "legacy_to_mirror_mismatch",
+			mutate: func(answer model.Envelope) model.Envelope {
+				answer.To = []string{"other/agent"}
+				return answer
+			},
+			wantErr: "answer to",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			validAnswer := signLiveAskAnswerWithRouteAndScope(
+				t,
+				query,
+				json.RawMessage(`{"answer":"canonical route mismatch","answered_by":"workledger/agent","question_type":"direct","read_only":true}`),
+				"workledger/agent",
+				[]string{"architect/agent"},
+				"architect/agent",
+				model.ScopeTargeted,
+				answerPrivateKey,
+			)
+			answer := test.mutate(validAnswer)
+
+			err := validateLiveAskAnswer(query, answer, answerPublicKey, fixedAskTime().Add(askAnswerDelay))
+			if err == nil {
+				t.Fatal("validateLiveAskAnswer() expected route error")
+			}
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("validateLiveAskAnswer() error = %q, want %q", err, test.wantErr)
+			}
+			if strings.Contains(err.Error(), "signature verification") {
+				t.Fatalf("validateLiveAskAnswer() error = %q, want route failure not signature failure", err)
+			}
+		})
+	}
+}
+
 func TestAskCommandSurfacesUnsupportedQueryClassAnswer(t *testing.T) {
 	withDeterministicAskRuntime(t)
 
@@ -767,11 +882,27 @@ func signLiveAskAnswerWithRoute(
 ) model.Envelope {
 	t.Helper()
 
+	return signLiveAskAnswerWithRouteAndScope(t, query, payload, from, to, recipient, "", privateKey)
+}
+
+func signLiveAskAnswerWithRouteAndScope(
+	t *testing.T,
+	query model.Envelope,
+	payload json.RawMessage,
+	from string,
+	to []string,
+	recipient string,
+	scope model.Scope,
+	privateKey ed25519.PrivateKey,
+) model.Envelope {
+	t.Helper()
+
 	answer := model.Envelope{
 		MessageID:      "answer-live",
 		ThreadID:       query.ThreadID,
 		From:           from,
 		To:             append([]string(nil), to...),
+		Scope:          scope,
 		Recipient:      recipient,
 		Type:           model.MessageTypeAnswer,
 		Payload:        payload,
