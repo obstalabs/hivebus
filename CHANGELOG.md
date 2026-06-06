@@ -13,6 +13,10 @@
 - Signed envelope schema primitives for query, answer, request, and authority directive messages.
 - Typed NeuroRouter agent-run lifecycle envelopes (`nr.run.*`) — hivebus as receipts substrate for governed runs.
 
+### Changed
+
+- `hivebus ask --server` now exits 0 for delivered queries with no trusted answer and reports `delivered=true`, `answers=0`; delivery failures still exit non-zero.
+
 ## [0.2.0] - 2026-04-20
 
 - Add worker leases, runtime auth, dispatch, context snapshots, and resume capsules for the v0 HTTP runtime.

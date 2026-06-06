@@ -28,6 +28,10 @@ const (
 	defaultAskLiveTimeout  = 5 * time.Second
 	defaultAskPollInterval = 100 * time.Millisecond
 	askSelfRegisterLease   = 24 * time.Hour // WO-108: local dogfood asker sessions should survive daily loops.
+
+	askResponseStatusAnswered   = "answered"   // WO-109: a verified response is present.
+	askResponseStatusNoAnswer   = "no_answer"  // WO-109: delivery succeeded but no neuron answered.
+	askResponseStatusUnverified = "unverified" // WO-109: delivery succeeded but response provenance failed.
 )
 
 var (
@@ -56,7 +60,14 @@ type askOptions struct {
 }
 
 // WO-84: askExchange is the local fixture transport for the first ask->answer slice.
+// WO-109: live asks also use it to separate delivery success from response success.
 type askExchange struct {
+	Delivered         bool           `json:"delivered"`                    // WO-109: delivery is hivebus state, separate from response success.
+	Recipient         string         `json:"recipient"`                    // WO-109: report the addressed recipient set even when no answer is trusted.
+	QueryMessageID    string         `json:"query_message_id"`             // WO-109: correlate delivered-no-answer reports without needing an answer.
+	Answers           int            `json:"answers"`                      // WO-109: trusted response count, not delivery success.
+	ResponseStatus    string         `json:"response_status"`              // WO-109: distinguish no answer from untrusted response provenance.
+	VerificationError string         `json:"verification_error,omitempty"` // WO-109: untrusted responses are provenance failures, not delivery failures.
 	Query             model.Envelope `json:"query"`
 	Answer            model.Envelope `json:"answer"`
 	QueryPublicKey    string         `json:"query_public_key"`
@@ -94,6 +105,14 @@ type askLiveTransport struct {
 	registered    map[string]struct{} // WO-108: avoid duplicate self-registration inside one ask run.
 }
 
+// WO-109: awaiting an answer is response provenance; inbox transport errors still
+// remain delivery/runtime errors, but no answer and untrusted answers do not.
+type askAnswerWaitResult struct {
+	Answer            model.Envelope
+	Found             bool
+	VerificationError string
+}
+
 // WO-97: signed query envelope travels through the runtime send message contract.
 type askSendAgentMessageRequest struct {
 	MessageID           string `json:"message_id"`
@@ -120,7 +139,15 @@ func newAskCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ask --to <agent>",
 		Short: "Ask a warm agent a read-only signed question",
-		Args:  cobra.NoArgs,
+		Long: strings.Join([]string{
+			"Ask a warm agent a read-only signed question.",
+			"",
+			"Live ask exit semantics:",
+			"  delivery failed: non-zero error; the query did not reach the addressed recipient set",
+			"  delivered answered: exit 0 with delivered=true and answers=1",
+			"  delivered no-answer or unverified answer: exit 0 with delivered=true and answers=0",
+		}, "\n"),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			normalizedOptions := options
 			normalizedOptions.normalize()
@@ -240,6 +267,11 @@ func buildAskExchange(options askOptions, question string, sentAt time.Time, ran
 	}
 
 	return askExchange{
+		Delivered:         true,
+		Recipient:         options.to,
+		QueryMessageID:    query.MessageID,
+		Answers:           1,
+		ResponseStatus:    askResponseStatusAnswered,
 		Query:             query,
 		Answer:            answer,
 		QueryPublicKey:    base64.StdEncoding.EncodeToString(queryPublicKey),
@@ -281,6 +313,7 @@ func buildLiveAskExchange(
 		return askExchange{}, err
 	}
 	queryPublicKeyEncoded := base64.StdEncoding.EncodeToString(queryPublicKey)
+	answerPublicKeyEncoded := base64.StdEncoding.EncodeToString(answerPublicKey)
 
 	// WO-108: only the explicit insecure dogfood path self-provisions an asker session.
 	if err := transport.registerAskerSession(options); err != nil {
@@ -290,18 +323,35 @@ func buildLiveAskExchange(
 		return askExchange{}, err
 	}
 
-	answer, err := transport.awaitAnswer(query, answerPublicKey, options)
+	answerResult, err := transport.awaitAnswer(query, answerPublicKey, options)
 	if err != nil {
 		return askExchange{}, err
 	}
 
-	return askExchange{
+	exchange := askExchange{
+		Delivered:         true,
+		Recipient:         options.to,
+		QueryMessageID:    query.MessageID,
+		Answers:           0,
+		ResponseStatus:    askResponseStatusNoAnswer,
 		Query:             query,
-		Answer:            answer,
+		Answer:            model.Envelope{},
 		QueryPublicKey:    queryPublicKeyEncoded,
-		AnswerPublicKey:   base64.StdEncoding.EncodeToString(answerPublicKey),
+		AnswerPublicKey:   answerPublicKeyEncoded,
 		DeferredFollowups: append([]string(nil), askDeferredFollowups...),
-	}, nil
+	}
+	if answerResult.VerificationError != "" {
+		exchange.ResponseStatus = askResponseStatusUnverified
+		exchange.VerificationError = answerResult.VerificationError
+	}
+	if answerResult.Found {
+		exchange.Answer = answerResult.Answer
+		exchange.Answers = 1
+		exchange.ResponseStatus = askResponseStatusAnswered
+		exchange.VerificationError = ""
+	}
+
+	return exchange, nil
 }
 
 func buildSignedAskQuery(
@@ -560,7 +610,7 @@ func (transport askLiveTransport) awaitAnswer(
 	query model.Envelope,
 	answerPublicKey ed25519.PublicKey,
 	options askOptions,
-) (model.Envelope, error) {
+) (askAnswerWaitResult, error) {
 	now := transport.clock()
 	deadline := now().Add(options.timeout)
 	maxPolls := askMaxLivePolls(options.timeout, options.pollInterval)
@@ -568,35 +618,33 @@ func (transport askLiveTransport) awaitAnswer(
 	for attempt := 0; ; attempt++ {
 		answers, err := transport.fetchInboxAnswers(options.sessionID)
 		if err != nil {
-			return model.Envelope{}, err
+			return askAnswerWaitResult{}, err
 		}
 		for _, answer := range answers {
-			if answer.ReplyTo != query.MessageID || answer.ThreadID != query.ThreadID {
+			if !isLiveAskAnswerCandidate(query, answer) {
 				continue
 			}
 			if err := validateLiveAskAnswer(query, answer, answerPublicKey, now()); err != nil {
-				return model.Envelope{}, err
+				return askAnswerWaitResult{VerificationError: err.Error()}, nil
 			}
 
-			return answer, nil
+			return askAnswerWaitResult{Answer: answer, Found: true}, nil
 		}
 
 		if !now().Before(deadline) || attempt+1 >= maxPolls {
-			return model.Envelope{}, fmt.Errorf(
-				"no live answerer produced an answer before %s for query %s",
-				options.timeout,
-				query.MessageID,
-			)
+			return askAnswerWaitResult{}, nil
 		}
 		if options.pollInterval <= 0 {
-			return model.Envelope{}, fmt.Errorf(
-				"no live answerer produced an answer before %s for query %s",
-				options.timeout,
-				query.MessageID,
-			)
+			return askAnswerWaitResult{}, nil
 		}
 		transport.sleeper()(options.pollInterval)
 	}
+}
+
+func isLiveAskAnswerCandidate(query model.Envelope, answer model.Envelope) bool {
+	// WO-109: a partial correlation match is a response provenance error; an
+	// unrelated inbox message should not poison this delivered query.
+	return answer.ReplyTo == query.MessageID || answer.ThreadID == query.ThreadID
 }
 
 func askMaxLivePolls(timeout time.Duration, pollInterval time.Duration) int {

@@ -49,6 +49,15 @@ func TestAskCommandBuildsSignedReadOnlyRoundTrip(t *testing.T) {
 	if exchange.Answer.Type != model.MessageTypeAnswer {
 		t.Fatalf("answer type = %q, want %q", exchange.Answer.Type, model.MessageTypeAnswer)
 	}
+	if !exchange.Delivered {
+		t.Fatal("delivered = false, want true")
+	}
+	if exchange.Answers != 1 {
+		t.Fatalf("answers = %d, want 1", exchange.Answers)
+	}
+	if exchange.ResponseStatus != askResponseStatusAnswered {
+		t.Fatalf("response_status = %q, want %q", exchange.ResponseStatus, askResponseStatusAnswered)
+	}
 	if exchange.Answer.ReplyTo != exchange.Query.MessageID {
 		t.Fatalf("answer reply_to = %q, want %q", exchange.Answer.ReplyTo, exchange.Query.MessageID)
 	}
@@ -227,6 +236,21 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 	}
 	if exchange.Query.MessageID != sentQuery.MessageID {
 		t.Fatalf("query message_id = %q, want sent query %q", exchange.Query.MessageID, sentQuery.MessageID)
+	}
+	if !exchange.Delivered {
+		t.Fatal("delivered = false, want true")
+	}
+	if exchange.Recipient != "workledger/agent" {
+		t.Fatalf("recipient = %q, want workledger/agent", exchange.Recipient)
+	}
+	if exchange.QueryMessageID != sentQuery.MessageID {
+		t.Fatalf("query_message_id = %q, want sent query %q", exchange.QueryMessageID, sentQuery.MessageID)
+	}
+	if exchange.Answers != 1 {
+		t.Fatalf("answers = %d, want 1", exchange.Answers)
+	}
+	if exchange.ResponseStatus != askResponseStatusAnswered {
+		t.Fatalf("response_status = %q, want %q", exchange.ResponseStatus, askResponseStatusAnswered)
 	}
 	if exchange.Answer.Type != model.MessageTypeAnswer {
 		t.Fatalf("answer type = %q, want %q", exchange.Answer.Type, model.MessageTypeAnswer)
@@ -667,9 +691,17 @@ func TestAskCommandLiveTimeoutDoesNotFabricateAnswer(t *testing.T) {
 	withDeterministicAskRuntime(t)
 
 	answerPublicKey, _ := deterministicAskSigningKey(8)
+	var sentQuery model.Envelope
 	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
+			var request askSendAgentMessageRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatalf("Decode(send request) error = %v", err)
+			}
+			if err := json.Unmarshal([]byte(request.Body), &sentQuery); err != nil {
+				t.Fatalf("Unmarshal(query body) error = %v", err)
+			}
 			writeJSONResponse(t, w, askSendAgentMessageResponse{Status: "accepted"})
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/inbox"):
 			writeJSONResponse(t, w, map[string][]model.Envelope{"messages": []model.Envelope{}})
@@ -691,12 +723,39 @@ func TestAskCommandLiveTimeoutDoesNotFabricateAnswer(t *testing.T) {
 	})
 	cmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))
 
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("ask command expected no-live-answerer error")
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("ask command error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "no live answerer") {
-		t.Fatalf("ask command error = %q, want no-live-answerer", err)
+	if strings.Contains(output.String(), "no live answerer") {
+		t.Fatalf("ask output = %s, want delivery report without no-live-answerer error", output.String())
+	}
+	var exchange askExchange
+	if err := json.Unmarshal(output.Bytes(), &exchange); err != nil {
+		t.Fatalf("json.Unmarshal() exchange error = %v", err)
+	}
+	if !exchange.Delivered {
+		t.Fatal("delivered = false, want true")
+	}
+	if exchange.Recipient != "workledger/agent" {
+		t.Fatalf("recipient = %q, want workledger/agent", exchange.Recipient)
+	}
+	if exchange.QueryMessageID != sentQuery.MessageID {
+		t.Fatalf("query_message_id = %q, want sent query %q", exchange.QueryMessageID, sentQuery.MessageID)
+	}
+	if exchange.Answers != 0 {
+		t.Fatalf("answers = %d, want 0", exchange.Answers)
+	}
+	if exchange.ResponseStatus != askResponseStatusNoAnswer {
+		t.Fatalf("response_status = %q, want %q", exchange.ResponseStatus, askResponseStatusNoAnswer)
+	}
+	if exchange.VerificationError != "" {
+		t.Fatalf("verification_error = %q, want empty", exchange.VerificationError)
+	}
+	if exchange.Answer.Type != "" {
+		t.Fatalf("answer type = %q, want empty", exchange.Answer.Type)
 	}
 }
 
@@ -748,12 +807,30 @@ func TestAskCommandRejectsUnverifiedLiveAnswer(t *testing.T) {
 	})
 	cmd.SetIn(strings.NewReader("who owns this?\n"))
 
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("ask command expected verification error")
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("ask command error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "answer signature verification failed") {
-		t.Fatalf("ask command error = %q, want verification failure", err)
+	var exchange askExchange
+	if err := json.Unmarshal(output.Bytes(), &exchange); err != nil {
+		t.Fatalf("json.Unmarshal() exchange error = %v", err)
+	}
+	if !exchange.Delivered {
+		t.Fatal("delivered = false, want true")
+	}
+	if exchange.Answers != 0 {
+		t.Fatalf("answers = %d, want 0", exchange.Answers)
+	}
+	if exchange.ResponseStatus != askResponseStatusUnverified {
+		t.Fatalf("response_status = %q, want %q", exchange.ResponseStatus, askResponseStatusUnverified)
+	}
+	if !strings.Contains(exchange.VerificationError, "answer signature verification failed") {
+		t.Fatalf("verification_error = %q, want signature verification failure", exchange.VerificationError)
+	}
+	if strings.Contains(output.String(), "forged") {
+		t.Fatalf("ask output = %s, want forged answer withheld", output.String())
 	}
 }
 

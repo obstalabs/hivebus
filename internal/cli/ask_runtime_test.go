@@ -94,6 +94,21 @@ func TestAskCommandRoundTripsThroughRealRuntimeHandler(t *testing.T) {
 	if exchange.Answer.Type != model.MessageTypeAnswer {
 		t.Fatalf("answer type = %q, want %q", exchange.Answer.Type, model.MessageTypeAnswer)
 	}
+	if !exchange.Delivered {
+		t.Fatal("delivered = false, want true")
+	}
+	if exchange.Recipient != answererAgent {
+		t.Fatalf("recipient = %q, want %q", exchange.Recipient, answererAgent)
+	}
+	if exchange.QueryMessageID != exchange.Query.MessageID {
+		t.Fatalf("query_message_id = %q, want query %q", exchange.QueryMessageID, exchange.Query.MessageID)
+	}
+	if exchange.Answers != 1 {
+		t.Fatalf("answers = %d, want 1", exchange.Answers)
+	}
+	if exchange.ResponseStatus != askResponseStatusAnswered {
+		t.Fatalf("response_status = %q, want %q", exchange.ResponseStatus, askResponseStatusAnswered)
+	}
 	if exchange.Answer.ReplyTo != exchange.Query.MessageID {
 		t.Fatalf("answer reply_to = %q, want query %q", exchange.Answer.ReplyTo, exchange.Query.MessageID)
 	}
@@ -105,6 +120,88 @@ func TestAskCommandRoundTripsThroughRealRuntimeHandler(t *testing.T) {
 	}
 	if err := model.VerifyEnvelope(exchange.Answer, answerPublicKey); err != nil {
 		t.Fatalf("VerifyEnvelope(answer) error = %v", err)
+	}
+}
+
+func TestAskCommandDeliveredNoAnswerThroughRealRuntimeHandler(t *testing.T) {
+	withDeterministicAskRuntime(t)
+
+	const (
+		askerSession    = "sess-asker-no-answer"
+		askerAgent      = "architect/agent"
+		answererSession = "sess-answerer-no-answer"
+		answererAgent   = "workledger/agent"
+		operatorToken   = "operator-secret"
+		workerToken     = "worker-secret"
+	)
+
+	serverURL := "http://hivebus.test"
+	client := handlerBackedClient(newRuntimeAskHandler(t))
+	oldAskHTTPClient := askHTTPClient
+	askHTTPClient = client
+	t.Cleanup(func() {
+		askHTTPClient = oldAskHTTPClient
+	})
+
+	registerRuntimeAskSession(t, client, serverURL, workerToken, askerSession, askerAgent)
+	registerRuntimeAskSession(t, client, serverURL, workerToken, answererSession, answererAgent)
+
+	answerPublicKey, _ := deterministicAskSigningKey(12)
+
+	cmd := newAskCommand()
+	cmd.SetArgs([]string{
+		"--server", serverURL,
+		"--to", answererAgent,
+		"--from", askerAgent,
+		"--type", "canonical_repo",
+		"--session-id", askerSession,
+		"--operator-token", operatorToken,
+		"--worker-token", workerToken,
+		"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
+		"--timeout", "0s",
+		"--poll-interval", "0s",
+	})
+	cmd.SetIn(strings.NewReader("which workledger checkout is canonical and what's HEAD?\n"))
+
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("ask command against real runtime error = %v", err)
+	}
+
+	var exchange askExchange
+	if err := json.Unmarshal(output.Bytes(), &exchange); err != nil {
+		t.Fatalf("Unmarshal(exchange) error = %v", err)
+	}
+	if !exchange.Delivered {
+		t.Fatal("delivered = false, want true")
+	}
+	if exchange.Recipient != answererAgent {
+		t.Fatalf("recipient = %q, want %q", exchange.Recipient, answererAgent)
+	}
+	if exchange.QueryMessageID != exchange.Query.MessageID {
+		t.Fatalf("query_message_id = %q, want query %q", exchange.QueryMessageID, exchange.Query.MessageID)
+	}
+	if exchange.Answers != 0 {
+		t.Fatalf("answers = %d, want 0", exchange.Answers)
+	}
+	if exchange.ResponseStatus != askResponseStatusNoAnswer {
+		t.Fatalf("response_status = %q, want %q", exchange.ResponseStatus, askResponseStatusNoAnswer)
+	}
+	if exchange.VerificationError != "" {
+		t.Fatalf("verification_error = %q, want empty", exchange.VerificationError)
+	}
+	if exchange.Answer.Type != "" {
+		t.Fatalf("answer type = %q, want empty", exchange.Answer.Type)
+	}
+
+	delivered := pollRuntimeInbox(t, client, serverURL, workerToken, answererSession)
+	if len(delivered) != 1 {
+		t.Fatalf("answerer inbox messages = %d, want 1", len(delivered))
+	}
+	if delivered[0].Message.MessageID != exchange.QueryMessageID {
+		t.Fatalf("delivered message_id = %q, want query %q", delivered[0].Message.MessageID, exchange.QueryMessageID)
 	}
 }
 
