@@ -614,6 +614,7 @@ func (transport askLiveTransport) awaitAnswer(
 	now := transport.clock()
 	deadline := now().Add(options.timeout)
 	maxPolls := askMaxLivePolls(options.timeout, options.pollInterval)
+	// WO-110: keep scanning for a valid answer after the first bad candidate.
 	var verificationError string
 
 	for attempt := 0; ; attempt++ {
