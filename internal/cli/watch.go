@@ -15,6 +15,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// WO-114: keep watch client injection owned by watch, not ask.
+type watchHTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 func newWatchCommand() *cobra.Command {
 	var addr string
 	var token string
@@ -53,7 +58,7 @@ func runWatch(
 func runWatchWithClient(
 	ctx context.Context,
 	out io.Writer,
-	client askHTTPDoer,
+	client watchHTTPDoer,
 	addr string,
 	threadID string,
 	token string,
