@@ -161,7 +161,7 @@ func TestVerifyHivebusRejectsTamperedSignature(t *testing.T) {
 	verifier := mustVerifier(t, privateKey)
 
 	key := signLicense(t, privateKey, validPayload(time.Now().UTC(), LicenseTierPro))
-	tampered := key[:len(key)-1] + differentBase64URLChar(key[len(key)-1])
+	tampered := tamperLicenseSignature(t, key)
 
 	if _, err := verifier.VerifyHivebus(tampered); err == nil {
 		t.Fatal("expected tampered signature to be rejected")
@@ -258,6 +258,31 @@ func differentBase64URLChar(current byte) string {
 		return "B"
 	}
 	return "A"
+}
+
+func tamperLicenseSignature(t *testing.T, key string) string {
+	t.Helper()
+
+	// WO-106: mutate a signature byte, not ignored trailing base64url bits.
+	signatureStart := strings.LastIndex(key, ".") + 1
+	if signatureStart <= 0 || signatureStart >= len(key) {
+		t.Fatalf("license key does not contain a signature segment: %q", key)
+	}
+
+	tampered := key[:signatureStart] + differentBase64URLChar(key[signatureStart]) + key[signatureStart+1:]
+	_, signature, err := splitLicenseKey(key)
+	if err != nil {
+		t.Fatalf("split original license key: %v", err)
+	}
+	_, tamperedSignature, err := splitLicenseKey(tampered)
+	if err != nil {
+		t.Fatalf("split tampered license key: %v", err)
+	}
+	if bytes.Equal(signature, tamperedSignature) {
+		t.Fatal("tampered license signature decoded to the original bytes")
+	}
+
+	return tampered
 }
 
 func mustVerifier(t *testing.T, privateKey ed25519.PrivateKey) *Verifier {
