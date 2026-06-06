@@ -85,7 +85,7 @@ func runServe(
 		return err
 	}
 
-	workOrders, err := loadWorkOrderBridgeFromEnv()
+	workOrders, err := loadWorkOrderBridgeFromEnv(authDisabled)
 	if err != nil {
 		return err
 	}
@@ -145,7 +145,12 @@ func runServe(
 	}
 }
 
-func loadWorkOrderBridgeFromEnv() (runtime.WorkOrderBridge, error) {
+func loadWorkOrderBridgeFromEnv(authDisabled bool) (runtime.WorkOrderBridge, error) {
+	// WO-108: local auth-disabled serve should not require the optional Workledger bridge.
+	if authDisabled {
+		return nil, nil
+	}
+
 	apiKey := strings.TrimSpace(os.Getenv("WORKLEDGER_API_KEY"))
 	if apiKey == "" {
 		return nil, nil

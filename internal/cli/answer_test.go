@@ -371,6 +371,107 @@ func TestRootCommandIncludesAnswerCommand(t *testing.T) {
 	}
 }
 
+func TestAnswerCommandPrintPublicKeyExitsWithoutLoop(t *testing.T) {
+	publicKey, privateKey := deterministicAskSigningKey(71)
+
+	cmd := newAnswerCommand()
+	cmd.SetArgs([]string{
+		"--signing-key", base64.StdEncoding.EncodeToString(privateKey.Seed()),
+		"--print-public-key",
+	})
+
+	var output bytes.Buffer
+	var logs bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&logs)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("answer command error = %v", err)
+	}
+	if got := strings.TrimSpace(output.String()); got != base64.StdEncoding.EncodeToString(publicKey) {
+		t.Fatalf("printed public key = %q, want deterministic key", got)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", logs.String())
+	}
+}
+
+func TestAnswerPublicKeyFileRoundTripWithAsk(t *testing.T) {
+	publicKey, privateKey := deterministicAskSigningKey(72)
+	publicKeyFile := filepath.Join(t.TempDir(), "keys", "answer.pub")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/sessions/register":
+			writeJSONResponse(t, w, map[string]string{"status": "registered"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/agents/sessions/wl-1/inbox":
+			writeJSONResponse(t, w, map[string]any{"status": "ok", "messages": []any{}})
+			cancel()
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	oldClient := answerHTTPClient
+	answerHTTPClient = handlerBackedClient(handler)
+	t.Cleanup(func() {
+		answerHTTPClient = oldClient
+	})
+
+	cmd := newAnswerCommand()
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{
+		"--agent", "workledger/agent",
+		"--server", "http://hivebus.test",
+		"--session-id", "wl-1",
+		"--project", "hivebus",
+		"--repo", t.TempDir(),
+		"--signing-key", base64.StdEncoding.EncodeToString(privateKey),
+		"--public-key-file", publicKeyFile,
+		"--insecure",
+	})
+
+	var output bytes.Buffer
+	var logs bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&logs)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("answer command error = %v\nlogs=%s", err, logs.String())
+	}
+
+	encodedPublicKey := base64.StdEncoding.EncodeToString(publicKey)
+	data, err := os.ReadFile(publicKeyFile)
+	if err != nil {
+		t.Fatalf("ReadFile(public key) error = %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != encodedPublicKey {
+		t.Fatalf("public key file = %q, want deterministic key", got)
+	}
+
+	var startup answerStartupOutput
+	if err := json.Unmarshal(output.Bytes(), &startup); err != nil {
+		t.Fatalf("Unmarshal(startup) error = %v", err)
+	}
+	if startup.AnswerPublicKey != encodedPublicKey {
+		t.Fatalf("startup answer_public_key = %q, want deterministic key", startup.AnswerPublicKey)
+	}
+
+	options := askOptions{answerKeyFile: publicKeyFile}
+	options.normalize()
+	if err := options.loadAnswerKeyFile(); err != nil {
+		t.Fatalf("loadAnswerKeyFile() error = %v", err)
+	}
+	parsedPublicKey, err := parseAskPublicKey(options.answerPublicKey)
+	if err != nil {
+		t.Fatalf("parseAskPublicKey() error = %v", err)
+	}
+	if !bytes.Equal(parsedPublicKey, publicKey) {
+		t.Fatalf("ask parsed public key does not match answer key file")
+	}
+}
+
 type handlerRoundTripper struct {
 	handler http.Handler
 }

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -118,7 +117,7 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 	var sentQuery model.Envelope
 	var rawSentRequest map[string]json.RawMessage
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
 			if got := r.Header.Get("Authorization"); got != "Bearer operator-token" {
@@ -201,11 +200,10 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 	}))
-	defer server.Close()
 
 	cmd := newAskCommand()
 	cmd.SetArgs([]string{
-		"--server", server.URL,
+		"--server", serverURL,
 		"--to", "workledger/agent",
 		"--from", "architect/agent",
 		"--type", "canonical_repo",
@@ -245,6 +243,114 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 	}
 }
 
+func TestAskCommandInsecureSelfRegistersSessionBeforeSend(t *testing.T) {
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(26)
+	answerKeyFile := t.TempDir() + "/answer.pub"
+	if err := writeAnswerPublicKeyFile(answerKeyFile, base64.StdEncoding.EncodeToString(answerPublicKey)); err != nil {
+		t.Fatalf("writeAnswerPublicKeyFile() error = %v", err)
+	}
+	var sentQuery model.Envelope
+	var requestOrder []string
+
+	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/sessions/register":
+			requestOrder = append(requestOrder, "register")
+			if got := r.Header.Get("Authorization"); got != "" {
+				t.Fatalf("register Authorization = %q, want empty for tokenless insecure ask", got)
+			}
+			var payload model.AgentSessionPayload
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("Decode(register payload) error = %v", err)
+			}
+			if payload.AgentID != "asker-session" {
+				t.Fatalf("register agent_id = %q, want asker-session", payload.AgentID)
+			}
+			if payload.InstallationID != "local" {
+				t.Fatalf("register installation_id = %q, want local", payload.InstallationID)
+			}
+			if payload.SessionID != "asker-session" {
+				t.Fatalf("register session_id = %q, want asker-session", payload.SessionID)
+			}
+			if payload.ParticipantID != "architect/agent" {
+				t.Fatalf("register participant_id = %q, want architect/agent", payload.ParticipantID)
+			}
+			if payload.DeliveryMode != model.AgentDeliveryQueued {
+				t.Fatalf("register delivery_mode = %q, want %q", payload.DeliveryMode, model.AgentDeliveryQueued)
+			}
+			if payload.SessionStatus != model.AgentSessionOnline {
+				t.Fatalf("register session_status = %q, want %q", payload.SessionStatus, model.AgentSessionOnline)
+			}
+			wantLease := fixedAskTime().Add(askSelfRegisterLease).UTC().Format(time.RFC3339)
+			if payload.LeaseExpiresAt != wantLease {
+				t.Fatalf("register lease_expires_at = %q, want %q", payload.LeaseExpiresAt, wantLease)
+			}
+			writeJSONResponse(t, w, map[string]string{"status": "replaced"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
+			requestOrder = append(requestOrder, "send")
+			var request askSendAgentMessageRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatalf("Decode(send request) error = %v", err)
+			}
+			if err := json.Unmarshal([]byte(request.Body), &sentQuery); err != nil {
+				t.Fatalf("Unmarshal(query body) error = %v", err)
+			}
+			writeJSONResponse(t, w, askSendAgentMessageResponse{Status: "queued"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/agents/sessions/asker-session/inbox":
+			requestOrder = append(requestOrder, "inbox")
+			answer := signLiveAskAnswer(
+				t,
+				sentQuery,
+				json.RawMessage(`{"answer":"registered live answer","answered_by":"workledger/agent","question_type":"canonical_repo","read_only":true}`),
+				answerPrivateKey,
+			)
+			answerBody, err := json.Marshal(answer)
+			if err != nil {
+				t.Fatalf("Marshal(answer) error = %v", err)
+			}
+			writeJSONResponse(t, w, map[string]any{
+				"messages": []map[string]any{
+					{
+						"message": map[string]string{
+							"message_id": "answer-live",
+							"body":       string(answerBody),
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+
+	cmd := newAskCommand()
+	cmd.SetArgs([]string{
+		"--server", serverURL,
+		"--insecure",
+		"--to", "workledger/agent",
+		"--from", "architect/agent",
+		"--type", "canonical_repo",
+		"--session-id", "asker-session",
+		"--answer-public-key-file", answerKeyFile,
+	})
+	cmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))
+
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("ask command error = %v", err)
+	}
+	if !strings.Contains(output.String(), "registered live answer") {
+		t.Fatalf("ask output = %s, want registered live answer", output.String())
+	}
+	if got := strings.Join(requestOrder, ","); got != "register,send,inbox" {
+		t.Fatalf("request order = %s, want register,send,inbox", got)
+	}
+}
+
 func TestAskCommandSkipsMalformedUnrelatedInboxMessages(t *testing.T) {
 	// WO-100: stale malformed queue entries must not hide a later correlated answer.
 	withDeterministicAskRuntime(t)
@@ -252,7 +358,7 @@ func TestAskCommandSkipsMalformedUnrelatedInboxMessages(t *testing.T) {
 	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(14)
 	var sentQuery model.Envelope
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
 			var request askSendAgentMessageRequest
@@ -294,11 +400,10 @@ func TestAskCommandSkipsMalformedUnrelatedInboxMessages(t *testing.T) {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 	}))
-	defer server.Close()
 
 	cmd := newAskCommand()
 	cmd.SetArgs([]string{
-		"--server", server.URL,
+		"--server", serverURL,
 		"--to", "workledger/agent",
 		"--session-id", "asker-session",
 		"--operator-token", "operator-token",
@@ -439,8 +544,13 @@ func TestAskCommandInsecureLiveAskAuthorizationHeaders(t *testing.T) {
 			answerPublicKey, answerPrivateKey := deterministicAskSigningKey(25)
 			var sentQuery model.Envelope
 
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/sessions/register":
+					if got := r.Header.Get("Authorization"); got != test.wantInboxAuthorization {
+						t.Fatalf("register Authorization = %q, want %q", got, test.wantInboxAuthorization)
+					}
+					writeJSONResponse(t, w, map[string]string{"status": "registered"})
 				case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
 					if got := r.Header.Get("Authorization"); got != test.wantSendAuthorization {
 						t.Fatalf("send Authorization = %q, want %q", got, test.wantSendAuthorization)
@@ -481,10 +591,9 @@ func TestAskCommandInsecureLiveAskAuthorizationHeaders(t *testing.T) {
 					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
 			}))
-			defer server.Close()
 
 			args := []string{
-				"--server", server.URL,
+				"--server", serverURL,
 				"--insecure",
 				"--to", "workledger/agent",
 				"--from", "architect/agent",
@@ -520,7 +629,7 @@ func TestAskCommandLiveSendResponseObjectStillFailsRejectedStatus(t *testing.T) 
 	withDeterministicAskRuntime(t)
 
 	answerPublicKey, _ := deterministicAskSigningKey(13)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
 			writeJSONResponse(t, w, map[string]any{
@@ -533,11 +642,10 @@ func TestAskCommandLiveSendResponseObjectStillFailsRejectedStatus(t *testing.T) 
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 	}))
-	defer server.Close()
 
 	cmd := newAskCommand()
 	cmd.SetArgs([]string{
-		"--server", server.URL,
+		"--server", serverURL,
 		"--to", "workledger/agent",
 		"--session-id", "asker-session",
 		"--operator-token", "operator-token",
@@ -559,7 +667,7 @@ func TestAskCommandLiveTimeoutDoesNotFabricateAnswer(t *testing.T) {
 	withDeterministicAskRuntime(t)
 
 	answerPublicKey, _ := deterministicAskSigningKey(8)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
 			writeJSONResponse(t, w, askSendAgentMessageResponse{Status: "accepted"})
@@ -569,11 +677,10 @@ func TestAskCommandLiveTimeoutDoesNotFabricateAnswer(t *testing.T) {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 	}))
-	defer server.Close()
 
 	cmd := newAskCommand()
 	cmd.SetArgs([]string{
-		"--server", server.URL,
+		"--server", serverURL,
 		"--to", "workledger/agent",
 		"--timeout", "0s",
 		"--poll-interval", "0s",
@@ -600,7 +707,7 @@ func TestAskCommandRejectsUnverifiedLiveAnswer(t *testing.T) {
 	_, wrongAnswerPrivateKey := deterministicAskSigningKey(10)
 	var sentQuery model.Envelope
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
 			var request askSendAgentMessageRequest
@@ -629,11 +736,10 @@ func TestAskCommandRejectsUnverifiedLiveAnswer(t *testing.T) {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 	}))
-	defer server.Close()
 
 	cmd := newAskCommand()
 	cmd.SetArgs([]string{
-		"--server", server.URL,
+		"--server", serverURL,
 		"--to", "workledger/agent",
 		"--session-id", "asker-session",
 		"--operator-token", "operator-token",
@@ -940,7 +1046,7 @@ func TestAskCommandSurfacesUnsupportedQueryClassAnswer(t *testing.T) {
 	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(11)
 	var sentQuery model.Envelope
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
 			var request askSendAgentMessageRequest
@@ -969,11 +1075,10 @@ func TestAskCommandSurfacesUnsupportedQueryClassAnswer(t *testing.T) {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 	}))
-	defer server.Close()
 
 	cmd := newAskCommand()
 	cmd.SetArgs([]string{
-		"--server", server.URL,
+		"--server", serverURL,
 		"--to", "workledger/agent",
 		"--type", "canonical_repo",
 		"--session-id", "asker-session",
@@ -1063,6 +1168,18 @@ func withDeterministicAskRuntime(t *testing.T) {
 		askNow = oldNow
 		askRandomReader = oldRandomReader
 	})
+}
+
+func withAskHTTPHandler(t *testing.T, handler http.Handler) string {
+	t.Helper()
+
+	oldClient := askHTTPClient
+	askHTTPClient = handlerBackedClient(handler)
+	t.Cleanup(func() {
+		askHTTPClient = oldClient
+	})
+
+	return "http://hivebus.test"
 }
 
 func fixedAskTime() time.Time {

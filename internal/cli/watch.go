@@ -15,6 +15,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// WO-108: unit tests dispatch watch requests in-process under restricted networking.
+var watchHTTPClient askHTTPDoer = &http.Client{Timeout: 0}
+
 func newWatchCommand() *cobra.Command {
 	var addr string
 	var token string
@@ -68,8 +71,7 @@ func runWatch(
 		req.Header.Set("Last-Event-ID", strings.TrimSpace(lastEventID))
 	}
 
-	client := &http.Client{Timeout: 0}
-	resp, err := client.Do(req)
+	resp, err := watchHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}

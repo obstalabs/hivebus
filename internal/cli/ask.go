@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ const (
 	askAnswerDelay         = time.Second
 	defaultAskLiveTimeout  = 5 * time.Second
 	defaultAskPollInterval = 100 * time.Millisecond
+	askSelfRegisterLease   = 24 * time.Hour // WO-108: local dogfood asker sessions should survive daily loops.
 )
 
 var (
@@ -49,7 +51,8 @@ type askOptions struct {
 	operatorToken   string
 	workerToken     string // WO-98: RoleWorker bearer token for live ask inbox reads.
 	answerPublicKey string
-	insecure        bool // WO-104: allow tokenless live ask against a serve --auth-disabled server.
+	answerKeyFile   string // WO-108: local dogfood reads the answerer key without manual copy.
+	insecure        bool   // WO-104: allow tokenless live ask against a serve --auth-disabled server.
 }
 
 // WO-84: askExchange is the local fixture transport for the first ask->answer slice.
@@ -88,6 +91,7 @@ type askLiveTransport struct {
 	client        askHTTPDoer
 	now           func() time.Time
 	sleep         func(time.Duration)
+	registered    map[string]struct{} // WO-108: avoid duplicate self-registration inside one ask run.
 }
 
 // WO-97: signed query envelope travels through the runtime send message contract.
@@ -120,6 +124,9 @@ func newAskCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			normalizedOptions := options
 			normalizedOptions.normalize()
+			if err := normalizedOptions.loadAnswerKeyFile(); err != nil {
+				return err
+			}
 			if err := normalizedOptions.validate(); err != nil {
 				return err
 			}
@@ -142,6 +149,7 @@ func newAskCommand() *cobra.Command {
 						client:        askHTTPClient,
 						now:           askNow,
 						sleep:         askSleep,
+						registered:    make(map[string]struct{}),
 					},
 				)
 				if err != nil {
@@ -175,6 +183,12 @@ func newAskCommand() *cobra.Command {
 		"",
 		"base64 ed25519 public key expected to sign the answer",
 	) // WO-94: verify answer provenance before trusting delivery.
+	cmd.Flags().StringVar(
+		&options.answerKeyFile,
+		"answer-public-key-file",
+		"",
+		"path containing the base64 ed25519 public key expected to sign the answer",
+	) // WO-108: local dogfood can consume the answerer's key file without hand-copying.
 	cmd.Flags().BoolVar(&options.insecure, "insecure", false, "allow tokenless live ask against a serve --auth-disabled server") // WO-104: match serve --auth-disabled on the dogfood path.
 
 	return cmd
@@ -268,6 +282,10 @@ func buildLiveAskExchange(
 	}
 	queryPublicKeyEncoded := base64.StdEncoding.EncodeToString(queryPublicKey)
 
+	// WO-108: only the explicit insecure dogfood path self-provisions an asker session.
+	if err := transport.registerAskerSession(options); err != nil {
+		return askExchange{}, err
+	}
 	if err := transport.sendQuery(query, options); err != nil {
 		return askExchange{}, err
 	}
@@ -405,6 +423,67 @@ func buildFixtureAnswer(
 	}
 
 	return model.SignEnvelope(answer, answerPrivateKey)
+}
+
+func (transport askLiveTransport) registerAskerSession(options askOptions) error {
+	if !options.insecure {
+		return nil
+	}
+	if transport.registered != nil {
+		if _, exists := transport.registered[options.sessionID]; exists {
+			return nil
+		}
+	}
+
+	payload := model.AgentSessionPayload{
+		AgentID:        options.sessionID,
+		InstallationID: "local",
+		SessionID:      options.sessionID,
+		ParticipantID:  options.from,
+		DeliveryMode:   model.AgentDeliveryQueued,
+		SessionStatus:  model.AgentSessionOnline,
+		LeaseExpiresAt: transport.clock()().Add(askSelfRegisterLease).UTC().Format(time.RFC3339),
+	}
+	requestPayload, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	endpoint, err := askServerEndpoint(transport.baseURL, "/v0/agents/sessions/register")
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(requestPayload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(transport.workerToken) != "" {
+		request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(transport.workerToken))
+	}
+
+	response, err := transport.httpClient().Do(request)
+	if err != nil {
+		return fmt.Errorf("register live ask session: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf(
+			"register live ask session failed: status %d: %s",
+			response.StatusCode,
+			strings.TrimSpace(string(responseBody)),
+		)
+	}
+	if transport.registered != nil {
+		transport.registered[options.sessionID] = struct{}{}
+	}
+
+	return nil
 }
 
 func (transport askLiveTransport) sendQuery(
@@ -841,6 +920,27 @@ func parseAskPublicKey(encoded string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(decoded), nil
 }
 
+func (options *askOptions) loadAnswerKeyFile() error {
+	if options.answerKeyFile == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(options.answerKeyFile)
+	if err != nil {
+		return fmt.Errorf("read answer-public-key-file: %w", err)
+	}
+	fileKey := strings.TrimSpace(string(data))
+	if fileKey == "" {
+		return errors.New("answer-public-key-file is empty")
+	}
+	if options.answerPublicKey != "" && options.answerPublicKey != fileKey {
+		return errors.New("answer-public-key and answer-public-key-file differ")
+	}
+	options.answerPublicKey = fileKey
+
+	return nil
+}
+
 func askServerEndpoint(rawBaseURL string, endpointPath string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(rawBaseURL))
 	if err != nil {
@@ -896,6 +996,7 @@ func (options *askOptions) normalize() {
 	options.operatorToken = strings.TrimSpace(options.operatorToken)
 	options.workerToken = strings.TrimSpace(options.workerToken)
 	options.answerPublicKey = strings.TrimSpace(options.answerPublicKey)
+	options.answerKeyFile = strings.TrimSpace(options.answerKeyFile)
 }
 
 func (options askOptions) validate() error {

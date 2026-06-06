@@ -29,6 +29,8 @@ const (
 	defaultAnswerTTL               = 30 * time.Second
 	answerMaxPayloadBytes          = 8192 // WO-95: repo cards must stay bounded and fresh.
 	answerRandomTokenBytes         = 16
+	answerPublicKeyFileMode        = 0o644 // WO-108: public keys are non-secret local discovery material.
+	answerPublicKeyDirMode         = 0o755 // WO-108: create missing key-file parents for dogfood startup.
 	answerTrustClassToolAsserted   = "tool_asserted"
 	answerUnsupportedQueryClass    = "unsupported_query_class"
 	answerRepoStatusUnavailable    = "repo_status_unavailable"
@@ -55,6 +57,8 @@ type answerOptions struct {
 	workerToken       string
 	insecure          bool
 	signingKey        string
+	publicKeyFile     string // WO-108: publish the answer verification key for local ask.
+	printPublicKey    bool   // WO-108: deterministic key discovery without entering the loop.
 	leaseID           string
 	workOrder         string
 }
@@ -228,6 +232,8 @@ func newAnswerCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.workerToken, "worker-token", "", "worker auth token for register, heartbeat, inbox, and deliver")
 	cmd.Flags().BoolVar(&options.insecure, "insecure", false, "allow tokenless answerer calls against a serve --auth-disabled server")
 	cmd.Flags().StringVar(&options.signingKey, "signing-key", "", "base64 ed25519 private key or seed for answer signatures")
+	cmd.Flags().StringVar(&options.publicKeyFile, "public-key-file", "", "path to write the base64 ed25519 answer public key")     // WO-108: file plumbing only, no registry.
+	cmd.Flags().BoolVar(&options.printPublicKey, "print-public-key", false, "print the base64 ed25519 answer public key and exit") // WO-108: stdout-only discovery mode.
 	cmd.Flags().StringVar(&options.leaseID, "lease", "", "optional lease provenance for repo_status answers")
 	cmd.Flags().StringVar(&options.workOrder, "wo", "", "optional work-order provenance for repo_status answers")
 
@@ -248,6 +254,14 @@ func runAnswer(
 	deps answerRuntimeDeps,
 ) error {
 	options.normalize()
+	if options.printPublicKey {
+		publicKey, _, err := answerSigningKey(options.signingKey, deps.randomReader())
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(out, answerPublicKeyString(publicKey))
+		return err
+	}
 	if options.repoPath == "" {
 		repoPath, err := os.Getwd()
 		if err != nil {
@@ -304,12 +318,16 @@ func (runner *answerRunner) run(ctx context.Context, out io.Writer) error {
 	if err := runner.register(ctx); err != nil {
 		return err
 	}
+	encodedPublicKey := answerPublicKeyString(runner.publicKey)
+	if err := writeAnswerPublicKeyFile(runner.options.publicKeyFile, encodedPublicKey); err != nil {
+		return err
+	}
 	if err := writeJSON(out, answerStartupOutput{
 		Status:          "registered",
 		AgentID:         runner.options.agentID,
 		SessionID:       runner.options.sessionID,
 		ParticipantID:   runner.options.agentID,
-		AnswerPublicKey: base64.StdEncoding.EncodeToString(runner.publicKey),
+		AnswerPublicKey: encodedPublicKey,
 	}); err != nil {
 		return err
 	}
@@ -727,6 +745,27 @@ func answerSigningKey(encoded string, random io.Reader) (ed25519.PublicKey, ed25
 	}
 }
 
+func answerPublicKeyString(publicKey ed25519.PublicKey) string {
+	return base64.StdEncoding.EncodeToString(publicKey)
+}
+
+func writeAnswerPublicKeyFile(path string, encodedPublicKey string) error {
+	if path == "" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if dir != "." {
+		if err := os.MkdirAll(dir, answerPublicKeyDirMode); err != nil {
+			return fmt.Errorf("create public-key-file directory: %w", err)
+		}
+	}
+	if err := os.WriteFile(path, []byte(encodedPublicKey+"\n"), answerPublicKeyFileMode); err != nil {
+		return fmt.Errorf("write public-key-file: %w", err)
+	}
+
+	return nil
+}
+
 func answerRandomToken(random io.Reader) (string, error) {
 	token := make([]byte, answerRandomTokenBytes)
 	if _, err := io.ReadFull(random, token); err != nil {
@@ -746,6 +785,7 @@ func (options *answerOptions) normalize() {
 	options.operatorToken = strings.TrimSpace(options.operatorToken)
 	options.workerToken = strings.TrimSpace(options.workerToken)
 	options.signingKey = strings.TrimSpace(options.signingKey)
+	options.publicKeyFile = strings.TrimSpace(options.publicKeyFile)
 	options.leaseID = strings.TrimSpace(options.leaseID)
 	options.workOrder = strings.TrimSpace(options.workOrder)
 }

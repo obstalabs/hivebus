@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -38,22 +37,26 @@ func TestAskCommandRoundTripsThroughRealRuntimeHandler(t *testing.T) {
 		workerToken     = "worker-secret"
 	)
 
-	handler := newRuntimeAskHandler(t)
-	server := httptest.NewServer(handler)
-	defer server.Close()
+	serverURL := "http://hivebus.test"
+	client := handlerBackedClient(newRuntimeAskHandler(t))
+	oldAskHTTPClient := askHTTPClient
+	askHTTPClient = client
+	t.Cleanup(func() {
+		askHTTPClient = oldAskHTTPClient
+	})
 
 	// Both participants must be registered/online: QueueAgentMessage routes by
 	// resolving the target participant to an online session, so an unregistered
 	// target would be dropped — a real-contract fact a fake handler hides.
-	registerRuntimeAskSession(t, server.URL, workerToken, askerSession, askerAgent)
-	registerRuntimeAskSession(t, server.URL, workerToken, answererSession, answererAgent)
+	registerRuntimeAskSession(t, client, serverURL, workerToken, askerSession, askerAgent)
+	registerRuntimeAskSession(t, client, serverURL, workerToken, answererSession, answererAgent)
 
 	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(11)
 
 	// The answerer plays a real warm agent: poll the answerer inbox over the
 	// real handler, and when the signed query arrives, send a signed answer
 	// back to the asker through the same real /send path.
-	answerer := startRuntimeAnswerer(t, server.URL, runtimeAnswererConfig{
+	answerer := startRuntimeAnswerer(t, client, serverURL, runtimeAnswererConfig{
 		operatorToken:   operatorToken,
 		workerToken:     workerToken,
 		answererSession: answererSession,
@@ -64,7 +67,7 @@ func TestAskCommandRoundTripsThroughRealRuntimeHandler(t *testing.T) {
 
 	cmd := newAskCommand()
 	cmd.SetArgs([]string{
-		"--server", server.URL,
+		"--server", serverURL,
 		"--to", answererAgent,
 		"--from", askerAgent,
 		"--type", "canonical_repo",
@@ -135,7 +138,7 @@ func newRuntimeAskHandler(t *testing.T) http.Handler {
 	return runtime.NewHandler(st, artifacts, keys)
 }
 
-func registerRuntimeAskSession(t *testing.T, baseURL, workerToken, sessionID, participantID string) {
+func registerRuntimeAskSession(t *testing.T, client askHTTPDoer, baseURL, workerToken, sessionID, participantID string) {
 	t.Helper()
 
 	payload := model.AgentSessionPayload{
@@ -159,7 +162,7 @@ func registerRuntimeAskSession(t *testing.T, baseURL, workerToken, sessionID, pa
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+workerToken)
 
-	response, err := http.DefaultClient.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatalf("register %s error = %v", sessionID, err)
 	}
@@ -185,7 +188,7 @@ type runtimeAnswerer struct {
 // startRuntimeAnswerer runs a minimal real warm agent: poll the answerer inbox
 // over the real handler, and for each signed query reply with one signed answer
 // sent back to the asker through the real /send path.
-func startRuntimeAnswerer(t *testing.T, baseURL string, cfg runtimeAnswererConfig) *runtimeAnswerer {
+func startRuntimeAnswerer(t *testing.T, client askHTTPDoer, baseURL string, cfg runtimeAnswererConfig) *runtimeAnswerer {
 	t.Helper()
 
 	stopCh := make(chan struct{})
@@ -203,7 +206,7 @@ func startRuntimeAnswerer(t *testing.T, baseURL string, cfg runtimeAnswererConfi
 			case <-stopCh:
 				return
 			case <-ticker.C:
-				messages := pollRuntimeInbox(t, baseURL, cfg.workerToken, cfg.answererSession)
+				messages := pollRuntimeInbox(t, client, baseURL, cfg.workerToken, cfg.answererSession)
 				for _, record := range messages {
 					queryID := record.Message.MessageID
 					if _, seen := answered[queryID]; seen {
@@ -217,7 +220,7 @@ func startRuntimeAnswerer(t *testing.T, baseURL string, cfg runtimeAnswererConfi
 						continue
 					}
 					answered[queryID] = struct{}{}
-					sendRuntimeAnswer(t, baseURL, cfg, query)
+					sendRuntimeAnswer(t, client, baseURL, cfg, query)
 				}
 			}
 		}
@@ -232,7 +235,7 @@ func startRuntimeAnswerer(t *testing.T, baseURL string, cfg runtimeAnswererConfi
 	}
 }
 
-func pollRuntimeInbox(t *testing.T, baseURL, workerToken, sessionID string) []store.AgentMessageRecord {
+func pollRuntimeInbox(t *testing.T, client askHTTPDoer, baseURL, workerToken, sessionID string) []store.AgentMessageRecord {
 	t.Helper()
 
 	request, err := http.NewRequest(http.MethodGet, baseURL+"/v0/agents/sessions/"+sessionID+"/inbox", nil)
@@ -241,7 +244,7 @@ func pollRuntimeInbox(t *testing.T, baseURL, workerToken, sessionID string) []st
 	}
 	request.Header.Set("Authorization", "Bearer "+workerToken)
 
-	response, err := http.DefaultClient.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil
 	}
@@ -259,7 +262,7 @@ func pollRuntimeInbox(t *testing.T, baseURL, workerToken, sessionID string) []st
 	return inbox.Messages
 }
 
-func sendRuntimeAnswer(t *testing.T, baseURL string, cfg runtimeAnswererConfig, query model.Envelope) {
+func sendRuntimeAnswer(t *testing.T, client askHTTPDoer, baseURL string, cfg runtimeAnswererConfig, query model.Envelope) {
 	t.Helper()
 
 	answer := model.Envelope{
@@ -309,7 +312,7 @@ func sendRuntimeAnswer(t *testing.T, baseURL string, cfg runtimeAnswererConfig, 
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+cfg.operatorToken)
 
-	response, err := http.DefaultClient.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return
 	}

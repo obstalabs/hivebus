@@ -7,6 +7,7 @@
 - `hivebus ask` read-only query/answer primitive for signed direct agent questions.
 - `hivebus ask --server` live delivery for signed localhost ask/answer dogfood loops.
 - `hivebus ask --insecure` for tokenless live ask against a `serve --auth-disabled` server.
+- Local ask/answer dogfood conveniences: insecure ask self-registration, answer public-key files, and auth-disabled serve env skipping.
 - `hivebus answer` conservative repo_status answerer loop for local signed ask/answer round trips.
 - Orthogonal envelope routing fields for visibility, scope, reply policy, redirects, and collection.
 - Signed envelope schema primitives for query, answer, request, and authority directive messages.

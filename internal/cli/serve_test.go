@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,38 @@ func TestLoadKeyStoreAllowsExplicitAuthDisabled(t *testing.T) {
 	}
 	if keys != nil {
 		t.Fatalf("expected nil keystore when auth disabled, got %#v", keys)
+	}
+}
+
+func TestLoadWorkOrderBridgeSkipsEnvWhenAuthDisabled(t *testing.T) {
+	t.Helper()
+
+	t.Setenv("WORKLEDGER_API_KEY", "configured")
+	t.Setenv("WORKLEDGER_URL", "")
+	t.Setenv("WORKLEDGER_HOST", "")
+
+	bridge, err := loadWorkOrderBridgeFromEnv(true)
+	if err != nil {
+		t.Fatalf("loadWorkOrderBridgeFromEnv() error = %v", err)
+	}
+	if bridge != nil {
+		t.Fatalf("expected nil workledger bridge when auth disabled, got %#v", bridge)
+	}
+}
+
+func TestLoadWorkOrderBridgeStillRequiresURLWhenAuthEnabled(t *testing.T) {
+	t.Helper()
+
+	t.Setenv("WORKLEDGER_API_KEY", "configured")
+	t.Setenv("WORKLEDGER_URL", "")
+	t.Setenv("WORKLEDGER_HOST", "")
+
+	_, err := loadWorkOrderBridgeFromEnv(false)
+	if err == nil {
+		t.Fatal("loadWorkOrderBridgeFromEnv() expected URL/HOST error")
+	}
+	if !strings.Contains(err.Error(), "WORKLEDGER_API_KEY requires WORKLEDGER_URL or WORKLEDGER_HOST") {
+		t.Fatalf("loadWorkOrderBridgeFromEnv() error = %q, want URL/HOST requirement", err)
 	}
 }
 

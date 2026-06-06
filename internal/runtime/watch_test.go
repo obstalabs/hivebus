@@ -99,10 +99,7 @@ func TestWatchThreadStreamsOrderedEventsAndClosesOnFinal(t *testing.T) {
 		t.Fatalf("complete status = %d, body = %s", completeRec.Code, completeRec.Body.String())
 	}
 
-	server := httptest.NewServer(handler)
-	defer server.Close()
-
-	events := mustCollectWatchEvents(t, server.URL, thread.ThreadID, "")
+	events := mustCollectWatchEvents(t, handler, thread.ThreadID, "")
 	if len(events) < 5 {
 		t.Fatalf("expected at least 5 events, got %d", len(events))
 	}
@@ -191,10 +188,7 @@ func TestWatchThreadResumesAfterLastEventID(t *testing.T) {
 		t.Fatal("expected to find partial-result sequence")
 	}
 
-	server := httptest.NewServer(handler)
-	defer server.Close()
-
-	events := mustCollectWatchEvents(t, server.URL, thread.ThreadID, jsonNumberString(resumeFrom))
+	events := mustCollectWatchEvents(t, handler, thread.ThreadID, jsonNumberString(resumeFrom))
 	if len(events) != 1 {
 		t.Fatalf("expected 1 resumed event, got %d", len(events))
 	}
@@ -203,21 +197,17 @@ func TestWatchThreadResumesAfterLastEventID(t *testing.T) {
 	}
 }
 
-func mustCollectWatchEvents(t *testing.T, baseURL string, threadID string, lastEventID string) []store.ThreadEvent {
+func mustCollectWatchEvents(t *testing.T, handler http.Handler, threadID string, lastEventID string) []store.ThreadEvent {
 	t.Helper()
 
-	req, err := http.NewRequest(http.MethodGet, baseURL+"/v0/threads/"+threadID+"/watch", nil)
-	if err != nil {
-		t.Fatalf("NewRequest() error = %v", err)
-	}
+	req := httptest.NewRequest(http.MethodGet, "/v0/threads/"+threadID+"/watch", nil)
 	if lastEventID != "" {
 		req.Header.Set("Last-Event-ID", lastEventID)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("Do() error = %v", err)
-	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	resp := rec.Result()
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
