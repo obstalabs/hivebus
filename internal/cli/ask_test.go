@@ -411,6 +411,111 @@ func TestAskCommandInsecureAllowsTokenlessLiveAsk(t *testing.T) {
 	}
 }
 
+// WO-107: cover the actual --insecure command path and live transport headers.
+func TestAskCommandInsecureLiveAskAuthorizationHeaders(t *testing.T) {
+	tests := []struct {
+		name                   string
+		operatorToken          string
+		workerToken            string
+		wantSendAuthorization  string
+		wantInboxAuthorization string
+	}{
+		{
+			name: "tokenless",
+		},
+		{
+			name:                   "provided_tokens",
+			operatorToken:          "operator-token",
+			workerToken:            "worker-token",
+			wantSendAuthorization:  "Bearer operator-token",
+			wantInboxAuthorization: "Bearer worker-token",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			withDeterministicAskRuntime(t)
+
+			answerPublicKey, answerPrivateKey := deterministicAskSigningKey(25)
+			var sentQuery model.Envelope
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
+					if got := r.Header.Get("Authorization"); got != test.wantSendAuthorization {
+						t.Fatalf("send Authorization = %q, want %q", got, test.wantSendAuthorization)
+					}
+					var request askSendAgentMessageRequest
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Fatalf("Decode(send request) error = %v", err)
+					}
+					if err := json.Unmarshal([]byte(request.Body), &sentQuery); err != nil {
+						t.Fatalf("Unmarshal(query body) error = %v", err)
+					}
+					writeJSONResponse(t, w, askSendAgentMessageResponse{Status: "queued"})
+				case r.Method == http.MethodGet && r.URL.Path == "/v0/agents/sessions/asker-session/inbox":
+					if got := r.Header.Get("Authorization"); got != test.wantInboxAuthorization {
+						t.Fatalf("inbox Authorization = %q, want %q", got, test.wantInboxAuthorization)
+					}
+					answer := signLiveAskAnswer(
+						t,
+						sentQuery,
+						json.RawMessage(`{"answer":"insecure live answer","answered_by":"workledger/agent","question_type":"canonical_repo","read_only":true}`),
+						answerPrivateKey,
+					)
+					answerBody, err := json.Marshal(answer)
+					if err != nil {
+						t.Fatalf("Marshal(answer) error = %v", err)
+					}
+					writeJSONResponse(t, w, map[string]any{
+						"messages": []map[string]any{
+							{
+								"message": map[string]string{
+									"message_id": "answer-live",
+									"body":       string(answerBody),
+								},
+							},
+						},
+					})
+				default:
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			args := []string{
+				"--server", server.URL,
+				"--insecure",
+				"--to", "workledger/agent",
+				"--from", "architect/agent",
+				"--type", "canonical_repo",
+				"--session-id", "asker-session",
+				"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
+			}
+			if test.operatorToken != "" {
+				args = append(args, "--operator-token", test.operatorToken)
+			}
+			if test.workerToken != "" {
+				args = append(args, "--worker-token", test.workerToken)
+			}
+
+			cmd := newAskCommand()
+			cmd.SetArgs(args)
+			cmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))
+
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("ask command error = %v", err)
+			}
+			if !strings.Contains(output.String(), "insecure live answer") {
+				t.Fatalf("ask output = %s, want insecure live answer", output.String())
+			}
+		})
+	}
+}
+
 func TestAskCommandLiveSendResponseObjectStillFailsRejectedStatus(t *testing.T) {
 	withDeterministicAskRuntime(t)
 
