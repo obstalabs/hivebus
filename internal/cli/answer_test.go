@@ -34,11 +34,15 @@ func TestAnswerRunnerAnswersRepoStatusOverHTTPContract(t *testing.T) {
 		facts: repoStatusFacts{
 			AgentID:           "workledger/agent",
 			Project:           "hivebus",
+			RepoID:            "/repo/hivebus",
 			CanonicalRepoPath: "/repo/hivebus",
 			Remote:            "git@example.com:obstalabs/hivebus.git",
 			Branch:            "main",
 			HeadShort:         "abc1234",
 			HeadFull:          "abc1234567890abc1234567890abc1234567890",
+			AbsoluteGitDir:    "/repo/hivebus/.git",
+			GitDirDev:         11,
+			GitDirIno:         22,
 			Dirty:             true,
 			WorktreeRole:      "primary_worktree",
 			LeaseID:           "lease-1",
@@ -196,8 +200,20 @@ func TestAnswerRunnerAnswersRepoStatusOverHTTPContract(t *testing.T) {
 	if payload.CanonicalRepoPath != "/repo/hivebus" {
 		t.Fatalf("canonical_repo_path = %q, want /repo/hivebus", payload.CanonicalRepoPath)
 	}
+	if payload.RepoID != "/repo/hivebus" {
+		t.Fatalf("repo_id = %q, want /repo/hivebus", payload.RepoID)
+	}
 	if payload.Head.Short != "abc1234" || payload.Head.Full == "" {
 		t.Fatalf("head = %#v, want short/full head", payload.Head)
+	}
+	if payload.GitHeadSHA != payload.Head.Full {
+		t.Fatalf("git_head_sha = %q, want head.full %q", payload.GitHeadSHA, payload.Head.Full)
+	}
+	if payload.AbsoluteGitDir != "/repo/hivebus/.git" {
+		t.Fatalf("absolute_git_dir = %q, want /repo/hivebus/.git", payload.AbsoluteGitDir)
+	}
+	if payload.GitDirDev != 11 || payload.GitDirIno != 22 {
+		t.Fatalf("git dir dev/ino = %d/%d, want 11/22", payload.GitDirDev, payload.GitDirIno)
 	}
 	if !payload.Dirty {
 		t.Fatal("dirty = false, want true")
@@ -340,6 +356,9 @@ func TestGitRepoStatusResolverReadsDiskAtAnswerTime(t *testing.T) {
 	if facts.CanonicalRepoPath != canonicalPath {
 		t.Fatalf("canonical_repo_path = %q, want %q", facts.CanonicalRepoPath, canonicalPath)
 	}
+	if facts.RepoID != canonicalPath {
+		t.Fatalf("repo_id = %q, want %q", facts.RepoID, canonicalPath)
+	}
 	if facts.Remote != "git@example.com:obstalabs/hivebus.git" {
 		t.Fatalf("remote = %q, want origin URL", facts.Remote)
 	}
@@ -348,6 +367,14 @@ func TestGitRepoStatusResolverReadsDiskAtAnswerTime(t *testing.T) {
 	}
 	if len(facts.HeadFull) != 40 || facts.HeadShort == "" {
 		t.Fatalf("head short/full = %q/%q, want git SHAs", facts.HeadShort, facts.HeadFull)
+	}
+	expectedGitDir := runGitTestCommand(t, repoPath, "rev-parse", "--absolute-git-dir")
+	if facts.AbsoluteGitDir != expectedGitDir {
+		t.Fatalf("absolute_git_dir = %q, want %q", facts.AbsoluteGitDir, expectedGitDir)
+	}
+	expectedDev, expectedIno := gitDirDeviceInode(expectedGitDir)
+	if facts.GitDirDev != expectedDev || facts.GitDirIno != expectedIno {
+		t.Fatalf("git dir dev/ino = %d/%d, want %d/%d", facts.GitDirDev, facts.GitDirIno, expectedDev, expectedIno)
 	}
 	if !facts.Dirty {
 		t.Fatal("dirty = false, want true from untracked file")

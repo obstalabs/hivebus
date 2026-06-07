@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	cryptoRand "crypto/rand"
 	"encoding/base64"
@@ -47,6 +48,7 @@ type askOptions struct {
 	from            string
 	to              string
 	questionType    string
+	repoPath        string
 	serverURL       string
 	offline         bool
 	timeout         time.Duration
@@ -197,6 +199,7 @@ func newAskCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.to, "to", "", "target agent identity")                                      // WO-84: target warm agent.
 	cmd.Flags().StringVar(&options.from, "from", defaultAskFrom, "asking agent identity")                      // WO-84: attributable asker.
 	cmd.Flags().StringVar(&options.questionType, "type", defaultAskQuestionType, "question type label")        // WO-84: bounded query intent label.
+	cmd.Flags().StringVar(&options.repoPath, "repo", "", "addressed repository path for repo_status answers")  // WO-119: bind repo_status verification to an addressed worktree.
 	cmd.Flags().StringVar(&options.serverURL, "server", "", "hivebus server URL for live delivery")            // WO-94: opt into server-backed ask.
 	cmd.Flags().BoolVar(&options.offline, "offline", false, "use the in-process fixture answer")               // WO-94: preserve fixture path.
 	cmd.Flags().DurationVar(&options.timeout, "timeout", defaultAskLiveTimeout, "live answer timeout")         // WO-94: bounded live wait.
@@ -626,7 +629,7 @@ func (transport askLiveTransport) awaitAnswer(
 			if !isLiveAskAnswerCandidate(query, answer) {
 				continue
 			}
-			if err := validateLiveAskAnswer(query, answer, answerPublicKey, now()); err != nil {
+			if err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, now(), options.repoPath); err != nil {
 				if verificationError == "" {
 					verificationError = err.Error()
 				}
@@ -716,6 +719,16 @@ func validateLiveAskAnswer(
 	answerPublicKey ed25519.PublicKey,
 	now time.Time,
 ) error {
+	return validateLiveAskAnswerForRepo(query, answer, answerPublicKey, now, "")
+}
+
+func validateLiveAskAnswerForRepo(
+	query model.Envelope,
+	answer model.Envelope,
+	answerPublicKey ed25519.PublicKey,
+	now time.Time,
+	addressedRepoPath string,
+) error {
 	if answer.Type != model.MessageTypeAnswer {
 		return fmt.Errorf("answer type = %q, want %q", answer.Type, model.MessageTypeAnswer)
 	}
@@ -734,8 +747,117 @@ func validateLiveAskAnswer(
 	if answer.Deadline != nil && now.After(*answer.Deadline) {
 		return errors.New("answer is expired")
 	}
+	if err := validateLiveAskRepoStatusObservation(query, answer, now, addressedRepoPath); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func validateLiveAskRepoStatusObservation(
+	query model.Envelope,
+	answer model.Envelope,
+	now time.Time,
+	addressedRepoPath string,
+) error {
+	queryPayload, err := decodeAskQueryPayload(query.Payload)
+	if err != nil {
+		return err
+	}
+	if !isRepoStatusQuestionType(queryPayload.QuestionType) {
+		return nil
+	}
+
+	if strings.TrimSpace(addressedRepoPath) == "" {
+		return errors.New("repo_status addressed repo is required")
+	}
+	addressedRepoID, err := canonicalRepoPath(addressedRepoPath)
+	if err != nil {
+		return fmt.Errorf("resolve addressed repo: %w", err)
+	}
+
+	var payload repoStatusAnswerPayload
+	if err := json.Unmarshal(answer.Payload, &payload); err != nil {
+		return fmt.Errorf("repo_status payload must be json: %w", err)
+	}
+	if payload.TrustClass != answerTrustClassToolAsserted {
+		return fmt.Errorf("repo_status trust_class = %q, want %q", payload.TrustClass, answerTrustClassToolAsserted)
+	}
+	if !payload.ReadOnly {
+		return errors.New("repo_status payload must be read_only")
+	}
+	if !isRepoStatusQuestionType(payload.QuestionType) {
+		return fmt.Errorf("repo_status question_type = %q, want repo_status", payload.QuestionType)
+	}
+	if strings.TrimSpace(payload.RepoID) == "" {
+		return errors.New("repo_status repo_id is required")
+	}
+	if payload.RepoID != addressedRepoID {
+		return fmt.Errorf("answer observed wrong repo: %s != %s", payload.RepoID, addressedRepoID)
+	}
+	if strings.TrimSpace(payload.GitHeadSHA) == "" {
+		return errors.New("repo_status git_head_sha is required")
+	}
+	if strings.TrimSpace(payload.Head.Full) != "" && payload.GitHeadSHA != payload.Head.Full {
+		return fmt.Errorf("repo_status git_head_sha = %q, want head.full %q", payload.GitHeadSHA, payload.Head.Full)
+	}
+	if strings.TrimSpace(payload.AbsoluteGitDir) == "" {
+		return errors.New("repo_status absolute_git_dir is required")
+	}
+	if payload.ObservedAt.IsZero() {
+		return errors.New("repo_status observed_at is required")
+	}
+	if payload.ExpiresAt.IsZero() {
+		return errors.New("repo_status expires_at is required")
+	}
+	if now.After(payload.ExpiresAt) {
+		return errors.New("repo_status observation is expired")
+	}
+
+	expectedGitDir, expectedDev, expectedIno, resolved := addressedRepoGitIdentity(context.Background(), addressedRepoID)
+	if !resolved {
+		return nil
+	}
+	if canonicalPathForCompare(payload.AbsoluteGitDir) != canonicalPathForCompare(expectedGitDir) {
+		return fmt.Errorf("answer observed wrong git dir: %s != %s", payload.AbsoluteGitDir, expectedGitDir)
+	}
+	if payload.GitDirDev == 0 || payload.GitDirIno == 0 || expectedDev == 0 || expectedIno == 0 {
+		return nil
+	}
+	if payload.GitDirDev != expectedDev || payload.GitDirIno != expectedIno {
+		return fmt.Errorf(
+			"answer observed wrong git dir inode: %d:%d != %d:%d",
+			payload.GitDirDev,
+			payload.GitDirIno,
+			expectedDev,
+			expectedIno,
+		)
+	}
+
+	return nil
+}
+
+func addressedRepoGitIdentity(ctx context.Context, repoPath string) (string, uint64, uint64, bool) {
+	absoluteGitDir, err := runGitCommand(ctx, repoPath, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", 0, 0, false
+	}
+	absoluteGitDir = strings.TrimSpace(absoluteGitDir)
+	if absoluteGitDir == "" {
+		return "", 0, 0, false
+	}
+	dev, ino := gitDirDeviceInode(absoluteGitDir)
+
+	return absoluteGitDir, dev, ino, true
+}
+
+func canonicalPathForCompare(path string) string {
+	canonical, err := canonicalRepoPath(path)
+	if err != nil {
+		return strings.TrimSpace(path)
+	}
+
+	return canonical
 }
 
 func validateLiveAskAnswerRoute(query model.Envelope, answer model.Envelope) error {
@@ -1050,6 +1172,7 @@ func (options *askOptions) normalize() {
 	options.from = strings.TrimSpace(options.from)
 	options.to = strings.TrimSpace(options.to)
 	options.questionType = strings.TrimSpace(options.questionType)
+	options.repoPath = strings.TrimSpace(options.repoPath)
 	options.serverURL = strings.TrimRight(strings.TrimSpace(options.serverURL), "/")
 	options.sessionID = strings.TrimSpace(options.sessionID)
 	options.operatorToken = strings.TrimSpace(options.operatorToken)
@@ -1066,6 +1189,8 @@ func (options askOptions) validate() error {
 		return errors.New("to is required")
 	case options.questionType == "":
 		return errors.New("type is required")
+	case isRepoStatusQuestionType(options.questionType) && options.repoPath == "":
+		return errors.New("repo is required for repo_status ask verification")
 	case options.offline && options.serverURL != "":
 		return errors.New("offline cannot be combined with server")
 	case options.timeout < 0:

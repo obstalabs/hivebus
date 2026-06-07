@@ -9,6 +9,7 @@
 - `hivebus ask --insecure` for tokenless live ask against a `serve --auth-disabled` server.
 - Local ask/answer dogfood conveniences: insecure ask self-registration, answer public-key files, and auth-disabled serve env skipping.
 - `hivebus answer` conservative repo_status answerer loop for local signed ask/answer round trips.
+- Signed repo_status observation context with repo ID, absolute git dir, and git-dir inode binding.
 - Orthogonal envelope routing fields for visibility, scope, reply policy, redirects, and collection.
 - Signed envelope schema primitives for query, answer, request, and authority directive messages.
 - Typed NeuroRouter agent-run lifecycle envelopes (`nr.run.*`) — hivebus as receipts substrate for governed runs.

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -125,11 +126,15 @@ type repoStatusRequest struct {
 type repoStatusFacts struct {
 	AgentID           string `json:"agent_id"`
 	Project           string `json:"project"`
+	RepoID            string `json:"repo_id"` // WO-119: bind the signed card to the addressed worktree.
 	CanonicalRepoPath string `json:"canonical_repo_path"`
 	Remote            string `json:"remote"`
 	Branch            string `json:"branch"`
 	HeadShort         string `json:"head_short"`
 	HeadFull          string `json:"head_full"`
+	AbsoluteGitDir    string `json:"absolute_git_dir"` // WO-119: signature must cover the observed .git directory.
+	GitDirDev         uint64 `json:"git_dir_dev"`      // WO-119: inode fingerprint catches same-path checkout drift.
+	GitDirIno         uint64 `json:"git_dir_ino"`      // WO-119: inode fingerprint catches same-path checkout drift.
 	Dirty             bool   `json:"dirty"`
 	WorktreeRole      string `json:"worktree_role"`
 	LeaseID           string `json:"lease,omitempty"`
@@ -142,20 +147,25 @@ type repoStatusAnswerPayload struct {
 	TrustClass        string `json:"trust_class"`
 	AgentID           string `json:"agent_id"`
 	Project           string `json:"project"`
+	RepoID            string `json:"repo_id"` // WO-119: verifier compares this to the addressed repo.
 	CanonicalRepoPath string `json:"canonical_repo_path"`
 	Remote            string `json:"remote"`
 	Branch            string `json:"branch"`
+	GitHeadSHA        string `json:"git_head_sha"`
 	Head              struct {
 		Short string `json:"short"`
 		Full  string `json:"full"`
 	} `json:"head"`
-	Dirty        bool      `json:"dirty"`
-	WorktreeRole string    `json:"worktree_role"`
-	LeaseID      string    `json:"lease,omitempty"`
-	WorkOrder    string    `json:"wo,omitempty"`
-	ObservedAt   time.Time `json:"observed_at"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	Nonce        string    `json:"nonce"`
+	AbsoluteGitDir string    `json:"absolute_git_dir"` // WO-119: signed observation context, not registration metadata.
+	GitDirDev      uint64    `json:"git_dir_dev"`
+	GitDirIno      uint64    `json:"git_dir_ino"`
+	Dirty          bool      `json:"dirty"`
+	WorktreeRole   string    `json:"worktree_role"`
+	LeaseID        string    `json:"lease,omitempty"`
+	WorkOrder      string    `json:"wo,omitempty"`
+	ObservedAt     time.Time `json:"observed_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	Nonce          string    `json:"nonce"`
 }
 
 type unsupportedAnswerPayload struct {
@@ -631,9 +641,14 @@ func repoStatusPayload(
 		TrustClass:        answerTrustClassToolAsserted,
 		AgentID:           facts.AgentID,
 		Project:           facts.Project,
+		RepoID:            facts.RepoID,
 		CanonicalRepoPath: facts.CanonicalRepoPath,
 		Remote:            facts.Remote,
 		Branch:            facts.Branch,
+		GitHeadSHA:        facts.HeadFull,
+		AbsoluteGitDir:    facts.AbsoluteGitDir,
+		GitDirDev:         facts.GitDirDev,
+		GitDirIno:         facts.GitDirIno,
 		Dirty:             facts.Dirty,
 		WorktreeRole:      facts.WorktreeRole,
 		LeaseID:           facts.LeaseID,
@@ -1023,6 +1038,12 @@ func (resolver gitRepoStatusResolver) ResolveRepoStatus(ctx context.Context, req
 	if err != nil {
 		return repoStatusFacts{}, err
 	}
+	absoluteGitDir, err := runGit(ctx, repoPath, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return repoStatusFacts{}, err
+	}
+	absoluteGitDir = strings.TrimSpace(absoluteGitDir)
+	gitDirDev, gitDirIno := gitDirDeviceInode(absoluteGitDir)
 	worktreeRole, err := gitWorktreeRole(ctx, repoPath, runGit)
 	if err != nil {
 		return repoStatusFacts{}, err
@@ -1031,11 +1052,15 @@ func (resolver gitRepoStatusResolver) ResolveRepoStatus(ctx context.Context, req
 	return repoStatusFacts{
 		AgentID:           request.AgentID,
 		Project:           request.Project,
+		RepoID:            repoPath,
 		CanonicalRepoPath: repoPath,
 		Remote:            strings.TrimSpace(remote),
 		Branch:            strings.TrimSpace(branch),
 		HeadShort:         strings.TrimSpace(shortHead),
 		HeadFull:          strings.TrimSpace(fullHead),
+		AbsoluteGitDir:    absoluteGitDir,
+		GitDirDev:         gitDirDev,
+		GitDirIno:         gitDirIno,
 		Dirty:             strings.TrimSpace(status) != "",
 		WorktreeRole:      worktreeRole,
 		LeaseID:           request.LeaseID,
@@ -1053,6 +1078,55 @@ func canonicalRepoPath(repoPath string) (string, error) {
 	}
 
 	return absPath, nil
+}
+
+func gitDirDeviceInode(path string) (uint64, uint64) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, 0
+	}
+
+	return fileInfoDeviceInode(info)
+}
+
+func fileInfoDeviceInode(info os.FileInfo) (uint64, uint64) {
+	if info == nil || info.Sys() == nil {
+		return 0, 0
+	}
+
+	stat := reflect.ValueOf(info.Sys())
+	if stat.Kind() == reflect.Pointer {
+		if stat.IsNil() {
+			return 0, 0
+		}
+		stat = stat.Elem()
+	}
+	if stat.Kind() != reflect.Struct {
+		return 0, 0
+	}
+
+	// WO-119: avoid a compile-time Unix syscall dependency; non-Unix systems keep path binding.
+	return unsignedStatField(stat, "Dev"), unsignedStatField(stat, "Ino")
+}
+
+func unsignedStatField(stat reflect.Value, name string) uint64 {
+	field := stat.FieldByName(name)
+	if !field.IsValid() {
+		return 0
+	}
+
+	switch field.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		value := field.Int()
+		if value < 0 {
+			return 0
+		}
+		return uint64(value)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return field.Uint()
+	default:
+		return 0
+	}
 }
 
 func gitWorktreeRole(

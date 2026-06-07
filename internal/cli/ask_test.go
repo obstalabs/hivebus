@@ -2,11 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1062,6 +1066,133 @@ func TestValidateLiveAskAnswerAcceptsCanonicalTargetedQueryRecipient(t *testing.
 	}
 }
 
+func TestValidateLiveAskAnswerBindsRepoStatusObservationContext(t *testing.T) {
+	// WO-119: a valid signature is not enough unless the signed card observed the addressed repo.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	withDeterministicAskRuntime(t)
+
+	repoA := initAskRepoStatusGitRepo(t, "repo-a")
+	repoB := initAskRepoStatusGitRepo(t, "repo-b")
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(25)
+	query := signedRepoStatusAskQuery(t, repoB)
+	observedAt := fixedAskTime().Add(askAnswerDelay)
+
+	wrongRepoAnswer := signedRepoStatusAnswerFromRepo(t, query, repoA, answerPrivateKey, observedAt, nil)
+	err := validateLiveAskAnswerForRepo(query, wrongRepoAnswer, answerPublicKey, observedAt.Add(time.Second), repoB)
+	if err == nil {
+		t.Fatal("validateLiveAskAnswerForRepo() expected wrong-repo rejection")
+	}
+	if !strings.Contains(err.Error(), "answer observed wrong repo") {
+		t.Fatalf("validateLiveAskAnswerForRepo() error = %q, want wrong repo", err)
+	}
+	if strings.Contains(err.Error(), "signature verification") {
+		t.Fatalf("validateLiveAskAnswerForRepo() error = %q, want provenance failure", err)
+	}
+
+	correctAnswer := signedRepoStatusAnswerFromRepo(t, query, repoB, answerPrivateKey, observedAt, nil)
+	if err := validateLiveAskAnswerForRepo(query, correctAnswer, answerPublicKey, observedAt.Add(time.Second), repoB); err != nil {
+		t.Fatalf("validateLiveAskAnswerForRepo() correct same-repo error = %v", err)
+	}
+}
+
+func TestValidateLiveAskAnswerRejectsRepoStatusGitDirDrift(t *testing.T) {
+	// WO-119: registration labels can drift; the signed live git dir is the binding.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	withDeterministicAskRuntime(t)
+
+	repoA := initAskRepoStatusGitRepo(t, "repo-a")
+	repoB := initAskRepoStatusGitRepo(t, "repo-b")
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(26)
+	query := signedRepoStatusAskQuery(t, repoB)
+	repoBID, err := canonicalRepoPath(repoB)
+	if err != nil {
+		t.Fatalf("canonicalRepoPath(repoB) error = %v", err)
+	}
+	observedAt := fixedAskTime().Add(askAnswerDelay)
+
+	driftedAnswer := signedRepoStatusAnswerFromRepo(t, query, repoA, answerPrivateKey, observedAt, func(payload *repoStatusAnswerPayload) {
+		payload.RepoID = repoBID
+		payload.CanonicalRepoPath = repoBID
+	})
+	err = validateLiveAskAnswerForRepo(query, driftedAnswer, answerPublicKey, observedAt.Add(time.Second), repoB)
+	if err == nil {
+		t.Fatal("validateLiveAskAnswerForRepo() expected git-dir drift rejection")
+	}
+	if !strings.Contains(err.Error(), "answer observed wrong git dir") {
+		t.Fatalf("validateLiveAskAnswerForRepo() error = %q, want wrong git dir", err)
+	}
+	if strings.Contains(err.Error(), "signature verification") {
+		t.Fatalf("validateLiveAskAnswerForRepo() error = %q, want provenance failure", err)
+	}
+}
+
+func TestValidateLiveAskAnswerRejectsStaleRepoStatusObservation(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	withDeterministicAskRuntime(t)
+
+	repoPath := initAskRepoStatusGitRepo(t, "repo")
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(27)
+	query := signedRepoStatusAskQuery(t, repoPath)
+	observedAt := fixedAskTime().Add(-time.Minute)
+
+	answer := signedRepoStatusAnswerFromRepo(t, query, repoPath, answerPrivateKey, observedAt, nil)
+	err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, fixedAskTime(), repoPath)
+	if err == nil {
+		t.Fatal("validateLiveAskAnswerForRepo() expected stale observation rejection")
+	}
+	if !strings.Contains(err.Error(), "repo_status observation is expired") {
+		t.Fatalf("validateLiveAskAnswerForRepo() error = %q, want stale observation", err)
+	}
+	if strings.Contains(err.Error(), "signature verification") {
+		t.Fatalf("validateLiveAskAnswerForRepo() error = %q, want freshness failure", err)
+	}
+}
+
+func TestValidateLiveAskAnswerFallsBackToRepoIDWhenGitDirIsUnavailable(t *testing.T) {
+	withDeterministicAskRuntime(t)
+
+	repoPath := filepath.Join(t.TempDir(), "not-a-git-repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(repoPath) error = %v", err)
+	}
+	repoID, err := canonicalRepoPath(repoPath)
+	if err != nil {
+		t.Fatalf("canonicalRepoPath(repoPath) error = %v", err)
+	}
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(28)
+	query := signedRepoStatusAskQuery(t, repoPath)
+	observedAt := fixedAskTime().Add(askAnswerDelay)
+	payload := repoStatusAnswerPayload{
+		QuestionType:   "repo_status",
+		ReadOnly:       true,
+		TrustClass:     answerTrustClassToolAsserted,
+		AgentID:        "workledger/agent",
+		RepoID:         repoID,
+		GitHeadSHA:     "abc1234567890abc1234567890abc1234567890abc",
+		AbsoluteGitDir: filepath.Join(repoID, ".git"),
+		ObservedAt:     observedAt,
+		ExpiresAt:      observedAt.Add(defaultAnswerTTL),
+		Nonce:          "nonce",
+	}
+	payload.Head.Short = "abc1234"
+	payload.Head.Full = payload.GitHeadSHA
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal(repo status payload) error = %v", err)
+	}
+
+	answer := signLiveAskAnswer(t, query, payloadBytes, answerPrivateKey)
+	if err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, observedAt.Add(time.Second), repoPath); err != nil {
+		t.Fatalf("validateLiveAskAnswerForRepo() fallback error = %v", err)
+	}
+}
+
 func TestValidateLiveAskAnswerRejectsCanonicalRecipientRouteMismatch(t *testing.T) {
 	// WO-102: signed canonical recipient fields are part of answer route trust.
 	withDeterministicAskRuntime(t)
@@ -1488,6 +1619,70 @@ func signLiveAskAnswerWithRouteAndScope(
 	}
 
 	return signed
+}
+
+func initAskRepoStatusGitRepo(t *testing.T, name string) string {
+	t.Helper()
+
+	repoPath := filepath.Join(t.TempDir(), name)
+	runGitTestCommand(t, "", "init", repoPath)
+	runGitTestCommand(t, repoPath, "checkout", "-b", "main")
+	runGitTestCommand(t, repoPath, "config", "user.email", "test@example.com")
+	runGitTestCommand(t, repoPath, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte(name+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README) error = %v", err)
+	}
+	runGitTestCommand(t, repoPath, "add", "README.md")
+	runGitTestCommand(t, repoPath, "commit", "-m", "initial")
+
+	return repoPath
+}
+
+func signedRepoStatusAskQuery(t *testing.T, repoPath string) model.Envelope {
+	t.Helper()
+
+	query, err := buildSignedAskQuery(
+		askOptions{from: "architect/agent", to: "workledger/agent", questionType: "repo_status", repoPath: repoPath},
+		"what repo status did you observe?",
+		fixedAskTime(),
+		mustAskPrivateKey(t, 29),
+		newCountingReader(),
+	)
+	if err != nil {
+		t.Fatalf("buildSignedAskQuery() error = %v", err)
+	}
+
+	return query
+}
+
+func signedRepoStatusAnswerFromRepo(
+	t *testing.T,
+	query model.Envelope,
+	repoPath string,
+	privateKey ed25519.PrivateKey,
+	observedAt time.Time,
+	mutate func(*repoStatusAnswerPayload),
+) model.Envelope {
+	t.Helper()
+
+	facts, err := gitRepoStatusResolver{}.ResolveRepoStatus(context.Background(), repoStatusRequest{
+		AgentID:  "workledger/agent",
+		Project:  "hivebus",
+		RepoPath: repoPath,
+	})
+	if err != nil {
+		t.Fatalf("ResolveRepoStatus() error = %v", err)
+	}
+	payload := repoStatusPayload("repo_status", facts, observedAt, observedAt.Add(defaultAnswerTTL), "nonce")
+	if mutate != nil {
+		mutate(&payload)
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal(repo status payload) error = %v", err)
+	}
+
+	return signLiveAskAnswer(t, query, payloadBytes, privateKey)
 }
 
 func writeJSONResponse(t *testing.T, writer http.ResponseWriter, payload any) {
