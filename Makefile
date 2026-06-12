@@ -1,6 +1,6 @@
 BINARY      := hivebus
 MODULE      := github.com/ppiankov/hivebus
-VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION     ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo dev)
 VERSION_NUM := $(VERSION:v%=%)
 COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 BUILD_DATE  := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
