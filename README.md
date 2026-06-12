@@ -16,44 +16,43 @@ The product shape behind this repo is:
 - specialist agents investigate asynchronously inside the same thread.
 - Hivebus preserves receipts, context, and auditability as JSON-first protocol objects.
 - once the diagnosis is verified, Hivebus drafts a work order for `workledger`, with optional execution integration to `hiveram.com`.
-- this repo owns the free/core surface; non-free editions live in the separate `hivebus-pro` repo.
+- this repo is the whole open core; live-session integration layers stay out of tree under the [boundary charter](docs/BOUNDARY.md).
 
 ## Licensing Model
 
-This repository follows the same model as `neurorouter-free`: it is the maintenance-focused community/core edition of Hivebus.
+This repository is the MIT open core for Hivebus. It is not a teaser for a separate paid Hivebus edition.
 
 - this repo keeps the indispensable protocol core public and self-hostable
-- `hivebus-pro` owns paid-only capability
+- protocol contracts, deterministic validation, signing, and CLI surfaces stay open here
+- live-session integration layers stay out of tree under the [boundary charter](docs/BOUNDARY.md)
 - new product capability does not land here by default unless a tracked work order explicitly expands the public boundary
 
-Commercial editions use the shared Obstalabs billing contract:
+Out-of-tree integrations may be commercial, but they do not own the protocol:
 
-- the billing service issues unified `ol_` license keys, not product-prefixed `hb_` keys
-- commercial Hivebus surfaces verify licenses with `OL_LICENSE_VERIFY_KEY`
-- the signed payload contains `products[]` plus `entitlements[]`; Hivebus requires an entitlement with `product=hivebus` and reads its tier from `tier`
-- checkout starts at `/v1/billing/checkout`, post-checkout license retrieval uses `/v1/billing/license`, and account management uses the billing portal
-- this open-source runtime keeps working without billing unless a commercial integration explicitly calls the license verifier
+- the open-source runtime works without a license verifier
+- paid or managed integrations must sit above the bus, not inside it
+- no commercial layer can make envelope shapes, trust-class semantics, key pinning, or the asker/answerer CLI non-open
 
-## Community Vs Paid
+## Core Vs Out-of-Tree
 
-Hivebus only becomes essential if it carries the whole path from issue intake to tracked execution. That means the free/community line is not a crippled toy: it includes the protocol core and the canonical `workledger` bridge. Paid tiers add hosted, commercial, org, and compliance layers on top.
+Hivebus only becomes essential if it carries the whole path from issue intake to tracked execution. That means the open core line is not a crippled toy: it includes the protocol core and the canonical `workledger` bridge. Out-of-tree integrations can add hosted, commercial, org, and compliance layers on top.
 
-Deployment location is not the tier split. Free/core stays self-hostable, Pro can run single-tenant anywhere, Teams adds shared coordination, and Enterprise adds corporate controls. Local, Fly, VPS, and private infrastructure are all valid deployment targets.
+Deployment location is not the split. Core stays self-hostable; integration-specific policy can run wherever its operator needs it. Local, Fly, VPS, and private infrastructure are all valid deployment targets.
 
-| Capability | Free | Pro | Teams | Enterprise | Repo |
-|------------|------|-----|-------|------------|------|
-| Typed JSON envelopes, threads, receipts, artifacts, and lifecycle state | yes | yes | yes | yes | `hivebus` |
-| NeuroRouter `nr.run.*` receipt envelope shapes for governed agent runs | yes | yes | yes | yes | `hivebus` |
-| Self-hosted bus core and deterministic validation/routing primitives | yes | yes | yes | yes | `hivebus` |
-| Nullbot intake core and clarification loop | yes | yes | yes | yes | `hivebus` |
-| Canonical `workledger` bridge: search, create, update, note, claim, release, context sync | yes | yes | yes | yes | `hivebus` |
-| Adaptive Optimization: background analysis, selective hints, escalation to Vectorcourt or human leads | no | yes | yes | yes | `hivebus-pro` |
-| Optional `hiveram.com` execution integration | no | yes | yes | yes | `hivebus-pro` |
-| Managed hosted bus/control plane | no | yes | yes | yes | `hivebus-pro` |
-| Shared queues, RBAC, team/org policy packs | no | no | yes | yes | `hivebus-pro` |
-| Enterprise retention, BYOK, regional controls, audit exports | no | no | no | yes | `hivebus-pro` |
+| Capability | Open Core | Out-of-Tree Integration | Boundary |
+|------------|-----------|-------------------------|----------|
+| Typed JSON envelopes, threads, receipts, artifacts, and lifecycle state | yes | can extend by protocol | `hivebus` |
+| NeuroRouter `nr.run.*` receipt envelope shapes for governed agent runs | yes | can consume by protocol | `hivebus` |
+| Self-hosted bus core and deterministic validation/routing primitives | yes | can deploy around it | `hivebus` |
+| Nullbot intake core and clarification loop | yes | can adapt around it | `hivebus` |
+| Canonical `workledger` bridge: search, create, update, note, claim, release, context sync | yes | can consume by protocol | `hivebus` |
+| Background analysis, selective hints, and escalation orchestration | no | yes | out-of-tree integration |
+| Live-session execution or warm-context answering | no | yes | out-of-tree integration |
+| Managed hosted bus/control plane | no | yes | out-of-tree integration |
+| Shared queues, RBAC, team/org policy packs | no | yes | out-of-tree integration |
+| Enterprise retention, BYOK, regional controls, audit exports | no | yes | out-of-tree integration |
 
-This is the separation line: free owns the structured conversation substrate plus canonical execution tracking; paid owns the commercial and organizational layers that sit on top.
+This is the separation line: core owns the structured conversation substrate plus canonical execution tracking; out-of-tree integrations own live-session, hosted, organizational, and compliance layers that sit on top.
 
 ## What This Is NOT
 
@@ -62,6 +61,8 @@ This is the separation line: free owns the structured conversation substrate plu
 - Not an agent marketplace.
 - Not autonomous remediation by default.
 - Not a prompt soup relay where untyped blobs bounce between models.
+
+Scope is governed by the [boundary charter](docs/BOUNDARY.md): Hivebus core is a dumb signed channel, and anything that makes the bus decide, generate, judge, or bridge a live session stays out of tree.
 
 ## Philosophy
 
@@ -155,8 +156,8 @@ workledger bridge
   -> creates the canonical work order that can fully resolve the user story
   -> leaves a compact recovery capsule for post-compaction handoff
 
-optional hiveram.com execution integration
-  -> mirrors or extends the same work order for commercial workflows when needed
+optional execution integration
+  -> mirrors or extends the same work order outside the core runtime when needed
 ```
 
 Current code layout:
@@ -171,14 +172,14 @@ Current code layout:
 
 ## Editions
 
-Hivebus keeps one protocol across all editions. The differences live in coordination and policy complexity, not deployment topology:
+Hivebus keeps one protocol across policy tiers. The labels in code are local limits and coordination profiles, not a promise of separate paid Hivebus repos or protocol forks:
 
 - `free`: self-hostable protocol core, smallest retention window, and artifact limits for solo experiments, implemented in this `hivebus` repo.
-- `pro`: single-tenant production coordination with longer retention and commercial runtime capability, implemented in `hivebus-pro`, and deployable anywhere.
-- `teams`: shared coordination, multi-operator policy, and larger routing/evidence limits, implemented in `hivebus-pro`.
-- `enterprise`: corporate controls, compliance posture, and governance surfaces, implemented in `hivebus-pro`.
+- `pro`: single-tenant production coordination profile with longer retention and higher local limits when an out-of-tree integration enables it.
+- `teams`: shared coordination profile with multi-operator policy and larger routing/evidence limits when an out-of-tree integration enables it.
+- `enterprise`: corporate controls, compliance posture, and governance profile when an out-of-tree integration enables it.
 
-This keeps the protocol shared while making the repo boundary explicit: free stays open here, non-free stays out of the OSS tree, and no edition requires a specific hosting location.
+This keeps the protocol shared while making the repo boundary explicit: core stays open here, integration-specific behavior stays out of the OSS tree, and no policy tier requires a specific hosting location.
 
 ## Canonical Workledger Contract
 
@@ -195,16 +196,16 @@ The free/community contract includes these workledger operations:
 - sync context blobs across machines and operator sessions
 - update project metadata when the bridge needs repo or projection state
 
-`hiveram.com` is optional and commercial. It may mirror or present the same work order, but it does not replace `workledger` as the ledger of record.
+Out-of-tree execution integrations may mirror or present the same work order, but they do not replace `workledger` as the ledger of record.
 
-Adaptive Optimization is also paid-only. It is the background intelligence layer that analyzes privacy-safe pattern events, produces selective evidence-backed hints, and can escalate to Vectorcourt or human leads when the operator opts in.
+Background analysis and live-session orchestration are out of tree. They can consume the same protocol, but they do not belong inside core.
 
 ## Known Limitations
 
 - The v0 runtime is HTTP-only and intentionally small: nullbot intake, thread promotion, dispatch, append, and replay.
 - Envelope signatures are represented structurally but not cryptographically verified yet.
 - The workledger bridge requires explicit `WORKLEDGER_URL` or `WORKLEDGER_HOST` plus `WORKLEDGER_API_KEY` configuration on the runtime host.
-- Optional `hiveram.com` sync is exposed as a hook surface, not a bundled free-runtime integration.
+- Optional execution sync is exposed as a hook surface, not a bundled core-runtime integration.
 - Capability routing is still declarative rather than runtime-driven.
 - Runtime auth validates Ed25519-signed API keys locally, with hashed token files retained only as an explicit local fallback.
 
@@ -212,8 +213,8 @@ Adaptive Optimization is also paid-only. It is the background intelligence layer
 
 - Add signed envelope verification and nonce replay protection.
 - Add additional nullbot intake adapters beyond the v0 HTTP path.
-- Extend the workledger bridge with richer search/update/note flows and keep optional Hiveram execution integration in `hivebus-pro`.
-- Keep non-free runtime surfaces in `hivebus-pro` instead of mixing them into this repo.
+- Extend the workledger bridge with richer search/update/note flows while keeping optional execution integrations out of tree.
+- Keep smart-bus and live-session runtime surfaces out of this repo.
 - Add queue-backed and realtime transports without changing protocol shape.
 
 ## License
