@@ -1,6 +1,8 @@
 package model
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,6 +62,7 @@ type AgentSessionPayload struct {
 	ParticipantID     string             `json:"participant_id"`
 	Capabilities      []string           `json:"capabilities,omitempty"`
 	Roles             []string           `json:"roles,omitempty"`
+	AnswerPublicKey   string             `json:"answer_public_key,omitempty"` // WO-122: discovery key only; askers pin trust locally.
 	DeliveryMode      AgentDeliveryMode  `json:"delivery_mode"`
 	SessionStatus     AgentSessionStatus `json:"session_status"`
 	LeaseExpiresAt    string             `json:"lease_expires_at"`
@@ -87,6 +90,15 @@ func (p AgentSessionPayload) Validate(eventType MessageType) error {
 
 	if _, err := time.Parse(time.RFC3339, p.LeaseExpiresAt); err != nil {
 		return fmt.Errorf("lease_expires_at must be RFC3339: %w", err)
+	}
+	if strings.TrimSpace(p.AnswerPublicKey) != "" {
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(p.AnswerPublicKey))
+		if err != nil {
+			return fmt.Errorf("answer_public_key must be base64 ed25519: %w", err)
+		}
+		if len(decoded) != ed25519.PublicKeySize {
+			return fmt.Errorf("answer_public_key size = %d, want %d", len(decoded), ed25519.PublicKeySize)
+		}
 	}
 
 	seenCapabilities := make(map[string]struct{}, len(p.Capabilities))

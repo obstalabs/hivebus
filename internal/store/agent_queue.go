@@ -27,6 +27,7 @@ type AgentSession struct {
 	ParticipantID     string                   `json:"participant_id"`
 	Capabilities      []string                 `json:"capabilities,omitempty"`
 	Roles             []string                 `json:"roles,omitempty"`
+	AnswerPublicKey   string                   `json:"answer_public_key,omitempty"` // WO-122: session discovery key; trust stays with askers.
 	DeliveryMode      model.AgentDeliveryMode  `json:"delivery_mode"`
 	SessionStatus     model.AgentSessionStatus `json:"session_status"`
 	LeaseExpiresAt    time.Time                `json:"lease_expires_at"`
@@ -47,19 +48,20 @@ type AgentMessageInput struct {
 }
 
 type AgentMessage struct {
-	MessageID           string                     `json:"message_id"`
-	SenderSessionID     string                     `json:"sender_session_id"`
-	SenderParticipantID string                     `json:"sender_participant_id"`
-	TargetParticipantID string                     `json:"target_participant_id"`
-	TargetAgentID       string                     `json:"target_agent_id,omitempty"`
-	ChannelID           string                     `json:"channel_id,omitempty"`
-	Body                string                     `json:"body"`
-	CreatedAt           time.Time                  `json:"created_at"`
-	ExpiresAt           time.Time                  `json:"expires_at"`
-	State               model.DeliveryReceiptState `json:"state"`
-	DeliveredSessionID  string                     `json:"delivered_session_id,omitempty"`
-	DeliveredAt         time.Time                  `json:"delivered_at,omitempty"`
-	Reason              string                     `json:"reason,omitempty"`
+	MessageID             string                     `json:"message_id"`
+	SenderSessionID       string                     `json:"sender_session_id"`
+	SenderParticipantID   string                     `json:"sender_participant_id"`
+	TargetParticipantID   string                     `json:"target_participant_id"`
+	TargetAgentID         string                     `json:"target_agent_id,omitempty"`
+	TargetAnswerPublicKey string                     `json:"target_answer_public_key,omitempty"` // WO-122: send response exposes the target session's declared key.
+	ChannelID             string                     `json:"channel_id,omitempty"`
+	Body                  string                     `json:"body"`
+	CreatedAt             time.Time                  `json:"created_at"`
+	ExpiresAt             time.Time                  `json:"expires_at"`
+	State                 model.DeliveryReceiptState `json:"state"`
+	DeliveredSessionID    string                     `json:"delivered_session_id,omitempty"`
+	DeliveredAt           time.Time                  `json:"delivered_at,omitempty"`
+	Reason                string                     `json:"reason,omitempty"`
 }
 
 type AgentMessageEvent struct {
@@ -159,6 +161,42 @@ func (s *Store) LoadChannel(ctx context.Context, channelID string) (model.Channe
 	`, channelID))
 }
 
+func (s *Store) ensureAgentSessionAnswerPublicKeyColumn(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(agent_sessions)`)
+	if err != nil {
+		return fmt.Errorf("inspect agent_sessions schema: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("scan agent_sessions schema: %w", err)
+		}
+		if name == "answer_public_key" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate agent_sessions schema: %w", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		ALTER TABLE agent_sessions ADD COLUMN answer_public_key TEXT NOT NULL DEFAULT ''
+	`); err != nil {
+		return fmt.Errorf("add answer_public_key to agent_sessions: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Store) RegisterAgentSession(
 	ctx context.Context,
 	payload model.AgentSessionPayload,
@@ -173,6 +211,9 @@ func (s *Store) RegisterAgentSession(
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := s.ensureAgentSessionAnswerPublicKeyColumn(ctx); err != nil {
+		return AgentSession{}, err
 	}
 	if at.IsZero() {
 		at = time.Now().UTC()
@@ -215,6 +256,7 @@ func (s *Store) RegisterAgentSession(
 			participant_id,
 			capabilities_json,
 			roles_json,
+			answer_public_key,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -222,13 +264,14 @@ func (s *Store) RegisterAgentSession(
 			replaces_session_id,
 			registered_at,
 			last_seen_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			agent_id = excluded.agent_id,
 			installation_id = excluded.installation_id,
 			participant_id = excluded.participant_id,
 			capabilities_json = excluded.capabilities_json,
 			roles_json = excluded.roles_json,
+			answer_public_key = excluded.answer_public_key,
 			delivery_mode = excluded.delivery_mode,
 			session_status = excluded.session_status,
 			lease_expires_at = excluded.lease_expires_at,
@@ -246,6 +289,7 @@ func (s *Store) RegisterAgentSession(
 		payload.ParticipantID,
 		joinCapabilities(payload.Capabilities),
 		joinCapabilities(payload.Roles),
+		strings.TrimSpace(payload.AnswerPublicKey),
 		string(payload.DeliveryMode),
 		string(payload.SessionStatus),
 		formatTime(leaseExpiresAt),
@@ -265,6 +309,7 @@ func (s *Store) RegisterAgentSession(
 			participant_id,
 			capabilities_json,
 			roles_json,
+			answer_public_key,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -312,6 +357,9 @@ func (s *Store) QueueAgentMessage(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := s.ensureAgentSessionAnswerPublicKeyColumn(ctx); err != nil {
+		return AgentMessageRecord{}, err
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -345,14 +393,15 @@ func (s *Store) QueueAgentMessage(
 	queuePosition++
 
 	var targetAgentID string
+	var targetAnswerPublicKey string
 	row := tx.QueryRowContext(ctx, `
-		SELECT agent_id
+		SELECT agent_id, answer_public_key
 		FROM agent_sessions
 		WHERE participant_id = ? AND session_status = ? AND lease_expires_at > ?
 		ORDER BY last_seen_at DESC
 		LIMIT 1
 	`, input.TargetParticipantID, string(model.AgentSessionOnline), formatTime(now))
-	switch err := row.Scan(&targetAgentID); {
+	switch err := row.Scan(&targetAgentID, &targetAnswerPublicKey); {
 	case errors.Is(err, sql.ErrNoRows):
 		targetAgentID = ""
 	case err != nil:
@@ -414,6 +463,7 @@ func (s *Store) QueueAgentMessage(
 	if err != nil {
 		return AgentMessageRecord{}, err
 	}
+	record.Message.TargetAnswerPublicKey = targetAnswerPublicKey
 
 	if err := tx.Commit(); err != nil {
 		return AgentMessageRecord{}, fmt.Errorf("commit queue agent message transaction: %w", err)
@@ -436,6 +486,9 @@ func (s *Store) PeekAgentInbox(
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := s.ensureAgentSessionAnswerPublicKeyColumn(ctx); err != nil {
+		return AgentSession{}, nil, err
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -464,6 +517,7 @@ func (s *Store) PeekAgentInbox(
 			participant_id,
 			capabilities_json,
 			roles_json,
+			answer_public_key,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -541,6 +595,9 @@ func (s *Store) DeliverAgentMessage(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := s.ensureAgentSessionAnswerPublicKeyColumn(ctx); err != nil {
+		return AgentMessageRecord{}, err
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -565,6 +622,7 @@ func (s *Store) DeliverAgentMessage(
 			participant_id,
 			capabilities_json,
 			roles_json,
+			answer_public_key,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -769,6 +827,7 @@ func loadAgentSessionRow(row *sql.Row) (AgentSession, error) {
 		&session.ParticipantID,
 		&capabilities,
 		&roles,
+		&session.AnswerPublicKey,
 		&deliveryMode,
 		&sessionStatus,
 		&leaseExpiresAt,

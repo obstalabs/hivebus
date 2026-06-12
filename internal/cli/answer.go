@@ -385,15 +385,16 @@ func (runner *answerRunner) heartbeat(ctx context.Context) error {
 func (runner *answerRunner) sessionPayload() model.AgentSessionPayload {
 	leaseExpiresAt := runner.clock()().Add(runner.options.leaseDuration).UTC()
 	return model.AgentSessionPayload{
-		AgentID:        runner.options.agentID,
-		InstallationID: runner.options.installationID,
-		SessionID:      runner.options.sessionID,
-		ParticipantID:  runner.options.agentID,
-		Capabilities:   []string{"repo_status", "canonical_worktree_status"},
-		Roles:          []string{"answerer"},
-		DeliveryMode:   model.AgentDeliveryQueued,
-		SessionStatus:  model.AgentSessionOnline,
-		LeaseExpiresAt: leaseExpiresAt.Format(time.RFC3339),
+		AgentID:         runner.options.agentID,
+		InstallationID:  runner.options.installationID,
+		SessionID:       runner.options.sessionID,
+		ParticipantID:   runner.options.agentID,
+		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
+		Roles:           []string{"answerer"},
+		AnswerPublicKey: answerPublicKeyString(runner.publicKey), // WO-122: bus distributes declared keys; askers decide trust.
+		DeliveryMode:    model.AgentDeliveryQueued,
+		SessionStatus:   model.AgentSessionOnline,
+		LeaseExpiresAt:  leaseExpiresAt.Format(time.RFC3339),
 	}
 }
 

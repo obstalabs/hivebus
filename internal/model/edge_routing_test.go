@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
@@ -23,6 +24,17 @@ func TestAgentSessionPayloadValidateRejectsBadReplacementState(t *testing.T) {
 
 	if err := payload.Validate(MessageTypeAgentSessionRegistered); err == nil {
 		t.Fatal("Validate(registered) expected an error")
+	}
+}
+
+func TestAgentSessionPayloadValidateRejectsBadAnswerPublicKey(t *testing.T) {
+	t.Helper()
+
+	payload := sampleAgentSessionPayload()
+	payload.AnswerPublicKey = base64.StdEncoding.EncodeToString([]byte("short"))
+
+	if err := payload.Validate(MessageTypeAgentSessionRegistered); err == nil {
+		t.Fatal("Validate(registered) expected an answer_public_key error")
 	}
 }
 
@@ -84,6 +96,12 @@ func sampleAgentSessionPayload() AgentSessionPayload {
 		SessionID:      "sess_nullbot_001",
 		ParticipantID:  "agent.field.nullbot",
 		Capabilities:   []string{"evidence.collect", "clarification.reply"},
+		AnswerPublicKey: base64.StdEncoding.EncodeToString([]byte{
+			1, 2, 3, 4, 5, 6, 7, 8,
+			9, 10, 11, 12, 13, 14, 15, 16,
+			17, 18, 19, 20, 21, 22, 23, 24,
+			25, 26, 27, 28, 29, 30, 31, 32,
+		}),
 		DeliveryMode:   AgentDeliveryQueued,
 		SessionStatus:  AgentSessionOnline,
 		LeaseExpiresAt: "2026-04-17T09:00:00Z",

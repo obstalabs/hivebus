@@ -37,21 +37,15 @@ The steps below assume `hivebus` is on PATH. If you skipped the install, use
 ## 1. A stable signing key (all shells)
 
 The answerer signs every answer. Use a **stable** 32-byte base64 seed so its public
-key does not change across restarts — generate it once and save it.
+key does not change across restarts. Generate it once and save it.
 
 ```sh
 mkdir -p ~/.hivebus
 head -c 32 /dev/urandom | base64 > ~/.hivebus/wl.seed     # one time only
 ```
 
-Derive the matching public key (the asker needs this to verify answers):
-
-```sh
-hivebus answer --print-public-key --signing-key "$(cat ~/.hivebus/wl.seed)" > ~/.hivebus/wl.pub
-cat ~/.hivebus/wl.pub
-```
-
-`--print-public-key` prints the key and exits without starting the loop.
+The answerer publishes its public key in its session registration. The bus only
+distributes that declared key; the asker decides whether to trust it.
 
 ---
 
@@ -69,12 +63,11 @@ env -u WORKLEDGER_API_KEY hivebus answer --server http://127.0.0.1:7097 --insecu
     --signing-key (cat ~/.hivebus/wl.seed) \
     --repo ~/dev/obstalabs-github/hivebus --project hivebus
 
-# --- terminal 3: ask ---
-set PUB (cat ~/.hivebus/wl.pub)
-echo "which checkout is canonical and what is HEAD?" | hivebus ask \
-    --server http://127.0.0.1:7097 --insecure \
-    --to workledger/agent --from architect/session --type repo_status \
-    --session-id asker-1 --answer-public-key $PUB --timeout 6s
+	# --- terminal 3: ask ---
+	echo "which checkout is canonical and what is HEAD?" | hivebus ask \
+	    --server http://127.0.0.1:7097 --insecure \
+	    --to workledger/agent --from architect/session --type repo_status \
+	    --session-id asker-1 --timeout 6s
 ```
 
 Fish notes: use `set VAR value`, not `VAR=value`; use `(cmd)` for substitution,
@@ -96,11 +89,10 @@ env -u WORKLEDGER_API_KEY hivebus answer --server http://127.0.0.1:7097 --insecu
     --repo ~/dev/obstalabs-github/hivebus --project hivebus
 
 # --- terminal 3: ask ---
-PUB="$(cat ~/.hivebus/wl.pub)"
 echo "which checkout is canonical and what is HEAD?" | hivebus ask \
     --server http://127.0.0.1:7097 --insecure \
     --to workledger/agent --from architect/session --type repo_status \
-    --session-id asker-1 --answer-public-key "$PUB" --timeout 6s
+    --session-id asker-1 --timeout 6s
 ```
 
 ---
@@ -121,11 +113,10 @@ env -u WORKLEDGER_API_KEY hivebus answer --server http://127.0.0.1:7097 --insecu
     --repo "$HOME/dev/obstalabs-github/hivebus" --project hivebus
 
 # terminal 3
-PUB="$(cat "$HOME/.hivebus/wl.pub")"
 echo "which checkout is canonical and what is HEAD?" | hivebus ask \
     --server http://127.0.0.1:7097 --insecure \
     --to workledger/agent --from architect/session --type repo_status \
-    --session-id asker-1 --answer-public-key "$PUB" --timeout 6s
+    --session-id asker-1 --timeout 6s
 ```
 
 ---
@@ -133,17 +124,53 @@ echo "which checkout is canonical and what is HEAD?" | hivebus ask \
 ## Adding more repos
 
 Run one `answer` per repo you want queryable. Give each a distinct `--agent`,
-`--session-id`, and `--repo`, and its own seed/pubkey pair:
+`--session-id`, `--repo`, and stable seed:
 
 ```sh
 # a second answerer for the workledger repo
 hivebus answer --server http://127.0.0.1:7097 --insecure \
     --agent workledger/wl-repo --session-id wl-repo-1 \
-    --signing-key "$(cat ~/.hivebus/wl-repo.seed)" \
-    --repo ~/dev/obstalabs-github/workledger --project workledger
+	    --signing-key "$(cat ~/.hivebus/wl-repo.seed)" \
+	    --repo ~/dev/obstalabs-github/workledger --project workledger
 ```
 
-Then `ask --to workledger/wl-repo --answer-public-key "$(cat ~/.hivebus/wl-repo.pub)"`.
+Then `ask --to workledger/wl-repo ...`. The first successful resolution pins that
+agent's declared key locally.
+
+---
+
+## Known answerer pins
+
+When `ask --server` has no `--answer-public-key` or `--answer-public-key-file`,
+it resolves the addressed answerer's declared key from the bus and pins it in:
+
+```text
+~/.hivebus/known_answerers
+```
+
+The file is created with mode `0600`. Each line is:
+
+```text
+agent_id base64-ed25519-public-key first-seen-rfc3339
+```
+
+On first use, `ask` prints:
+
+```text
+pinned agent_id=workledger/agent fingerprint=<sha256-hex>
+```
+
+The fingerprint is SHA-256 over the raw 32-byte ed25519 public key, encoded as
+lowercase hex. On later asks, the bus-offered key must match the pinned key. A
+mismatch is rejected as a possible impersonation and the pin file is not changed.
+
+To rotate an answerer key intentionally, stop the old answerer, update its
+`--signing-key`, remove that agent's line from `~/.hivebus/known_answerers`, and
+ask again to pin the new key.
+
+Explicit `--answer-public-key` and `--answer-public-key-file` bypass bus key
+resolution and pinning. Use them when you need a manual override or an
+out-of-band trust path.
 
 ---
 
@@ -167,7 +194,8 @@ Other classes (`file_provenance`, etc.) are separate WOs and may not be built ye
 | `WORKLEDGER_API_KEY requires WORKLEDGER_URL or WORKLEDGER_HOST` | serve sees the workledger key | prefix with `env -u WORKLEDGER_API_KEY` (already in the commands above) |
 | `operator-token is required for live ask send` | missing `--insecure` against an auth-disabled server | add `--insecure` |
 | `agent session not found` (inbox) | the asker session was never registered | `--insecure` self-registers the asker; ensure `--session-id` is set |
-| `delivered: true, answers: 0, response_status: unverified` | an answer arrived but failed signature/route/freshness | check `--answer-public-key` matches the answerer's `--signing-key`; the answer is rejected on purpose |
+| `answer key mismatch for agent ... possible impersonation` | the bus offered a key different from the pinned key | verify the answerer identity; if rotation was intentional, remove that agent's line from `~/.hivebus/known_answerers` and ask again |
+| `delivered: true, answers: 0, response_status: unverified` | an answer arrived but failed signature/route/freshness | check the answerer's stable `--signing-key`; the answer is rejected on purpose |
 | `no live answerer` / `answers: 0, no_answer` | nobody is answering | start the `answer` loop for that `--to` agent first; this is not a failure |
 | `unsupported delivery_mode` (manual curl) | wrong value | use `queued_delivery`, not `queued` |
 

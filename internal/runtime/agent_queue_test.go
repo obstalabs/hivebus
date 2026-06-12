@@ -21,15 +21,16 @@ func TestAgentMessagingLifecycleOverHTTP(t *testing.T) {
 	handler := NewHandler(st, openTestArtifactStore(t), keys)
 
 	registerBody := marshalJSON(t, model.AgentSessionPayload{
-		AgentID:        "nullbot-edge",
-		InstallationID: "install_nullbot_edge_001",
-		SessionID:      "sess_nullbot_001",
-		ParticipantID:  "agent.field.nullbot",
-		Capabilities:   []string{"clarification.reply"},
-		DeliveryMode:   model.AgentDeliveryQueued,
-		SessionStatus:  model.AgentSessionOnline,
-		LeaseExpiresAt: time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
-		HostAlias:      "smokevm-arm64",
+		AgentID:         "nullbot-edge",
+		InstallationID:  "install_nullbot_edge_001",
+		SessionID:       "sess_nullbot_001",
+		ParticipantID:   "agent.field.nullbot",
+		Capabilities:    []string{"clarification.reply"},
+		AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+		DeliveryMode:    model.AgentDeliveryQueued,
+		SessionStatus:   model.AgentSessionOnline,
+		LeaseExpiresAt:  time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
+		HostAlias:       "smokevm-arm64",
 	})
 	registerReq := httptest.NewRequest(
 		http.MethodPost,
@@ -42,6 +43,13 @@ func TestAgentMessagingLifecycleOverHTTP(t *testing.T) {
 	handler.ServeHTTP(registerRec, registerReq)
 	if registerRec.Code != http.StatusCreated {
 		t.Fatalf("register status = %d, body = %s", registerRec.Code, registerRec.Body.String())
+	}
+	var registerResponse registerAgentSessionResponse
+	if err := json.Unmarshal(registerRec.Body.Bytes(), &registerResponse); err != nil {
+		t.Fatalf("Unmarshal(register) error = %v", err)
+	}
+	if registerResponse.Session.AnswerPublicKey != "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=" {
+		t.Fatalf("register answer_public_key = %q, want declared key", registerResponse.Session.AnswerPublicKey)
 	}
 
 	sendBody := marshalJSON(t, sendAgentMessageRequest{
@@ -62,6 +70,13 @@ func TestAgentMessagingLifecycleOverHTTP(t *testing.T) {
 	handler.ServeHTTP(sendRec, sendReq)
 	if sendRec.Code != http.StatusCreated {
 		t.Fatalf("send status = %d, body = %s", sendRec.Code, sendRec.Body.String())
+	}
+	var sendResponse sendAgentMessageResponse
+	if err := json.Unmarshal(sendRec.Body.Bytes(), &sendResponse); err != nil {
+		t.Fatalf("Unmarshal(send) error = %v", err)
+	}
+	if sendResponse.Message.TargetAnswerPublicKey != "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=" {
+		t.Fatalf("send target_answer_public_key = %q, want declared key", sendResponse.Message.TargetAnswerPublicKey)
 	}
 
 	inboxReq := httptest.NewRequest(
