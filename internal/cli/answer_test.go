@@ -70,6 +70,9 @@ func TestAnswerRunnerAnswersRepoStatusOverHTTPContract(t *testing.T) {
 			if payload.SessionStatus != model.AgentSessionOnline {
 				t.Fatalf("register session_status = %q, want %q", payload.SessionStatus, model.AgentSessionOnline)
 			}
+			if payload.AnswerPublicKey != base64.StdEncoding.EncodeToString(answerPublicKey) {
+				t.Fatalf("register answer_public_key = %q, want deterministic key", payload.AnswerPublicKey)
+			}
 			registered = true
 			writeJSONResponse(t, w, map[string]string{"status": "registered"})
 		case r.Method == http.MethodGet && r.URL.Path == "/v0/agents/sessions/wl-1/inbox":

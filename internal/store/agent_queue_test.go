@@ -8,6 +8,8 @@ import (
 	"github.com/ppiankov/hivebus/internal/model"
 )
 
+const sampleAgentAnswerPublicKey = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
+
 func TestRegisterAgentSessionReplacesPreviousOnlineSession(t *testing.T) {
 	t.Helper()
 
@@ -39,6 +41,9 @@ func TestRegisterAgentSessionReplacesPreviousOnlineSession(t *testing.T) {
 	if second.SessionID != "sess_nullbot_new" {
 		t.Fatalf("expected new session id, got %q", second.SessionID)
 	}
+	if second.AnswerPublicKey != sampleAgentAnswerPublicKey {
+		t.Fatalf("answer_public_key = %q, want sample key", second.AnswerPublicKey)
+	}
 
 	if _, _, err := st.PeekAgentInbox(t.Context(), "sess_nullbot_old", now.Add(2*time.Minute), 10); !errors.Is(err, ErrAgentSessionNotFound) {
 		t.Fatalf("PeekAgentInbox(old session) error = %v, want %v", err, ErrAgentSessionNotFound)
@@ -50,6 +55,9 @@ func TestRegisterAgentSessionReplacesPreviousOnlineSession(t *testing.T) {
 	}
 	if session.SessionID != "sess_nullbot_new" {
 		t.Fatalf("expected new session id, got %q", session.SessionID)
+	}
+	if session.AnswerPublicKey != sampleAgentAnswerPublicKey {
+		t.Fatalf("peek answer_public_key = %q, want sample key", session.AnswerPublicKey)
 	}
 	if len(messages) != 0 {
 		t.Fatalf("expected empty new inbox, got %d", len(messages))
@@ -80,6 +88,9 @@ func TestQueuePeekDeliverAgentMessageLifecycle(t *testing.T) {
 	}, now.Add(1*time.Minute))
 	if err != nil {
 		t.Fatalf("QueueAgentMessage() error = %v", err)
+	}
+	if record.Message.TargetAnswerPublicKey != sampleAgentAnswerPublicKey {
+		t.Fatalf("target_answer_public_key = %q, want sample key", record.Message.TargetAnswerPublicKey)
 	}
 	if record.Message.State != model.DeliveryReceiptQueued {
 		t.Fatalf("expected queued state, got %q", record.Message.State)
@@ -289,14 +300,15 @@ func TestDeliverAgentMessageHidesRestrictedChannelFromUnauthorizedSession(t *tes
 
 func sampleAgentSessionPayload(sessionID string, participantID string, leaseUntil time.Time) model.AgentSessionPayload {
 	return model.AgentSessionPayload{
-		AgentID:        "nullbot-edge",
-		InstallationID: "install_nullbot_edge_001",
-		SessionID:      sessionID,
-		ParticipantID:  participantID,
-		Capabilities:   []string{"evidence.collect", "clarification.reply"},
-		DeliveryMode:   model.AgentDeliveryQueued,
-		SessionStatus:  model.AgentSessionOnline,
-		LeaseExpiresAt: leaseUntil.Format(time.RFC3339),
-		HostAlias:      "smokevm-arm64",
+		AgentID:         "nullbot-edge",
+		InstallationID:  "install_nullbot_edge_001",
+		SessionID:       sessionID,
+		ParticipantID:   participantID,
+		Capabilities:    []string{"evidence.collect", "clarification.reply"},
+		AnswerPublicKey: sampleAgentAnswerPublicKey,
+		DeliveryMode:    model.AgentDeliveryQueued,
+		SessionStatus:   model.AgentSessionOnline,
+		LeaseExpiresAt:  leaseUntil.Format(time.RFC3339),
+		HostAlias:       "smokevm-arm64",
 	}
 }

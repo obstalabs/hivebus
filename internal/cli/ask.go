@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	cryptoRand "crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -29,6 +32,8 @@ const (
 	defaultAskLiveTimeout  = 5 * time.Second
 	defaultAskPollInterval = 100 * time.Millisecond
 	askSelfRegisterLease   = 24 * time.Hour // WO-108: local dogfood asker sessions should survive daily loops.
+	knownAnswerersDirMode  = 0o700          // WO-122: pin metadata is local trust state, not public discovery material.
+	knownAnswerersFileMode = 0o600          // WO-122: match known_hosts-style private trust files.
 
 	askResponseStatusAnswered   = "answered"   // WO-109: a verified response is present.
 	askResponseStatusNoAnswer   = "no_answer"  // WO-109: delivery succeeded but no neuron answered.
@@ -45,20 +50,21 @@ var (
 )
 
 type askOptions struct {
-	from            string
-	to              string
-	questionType    string
-	repoPath        string
-	serverURL       string
-	offline         bool
-	timeout         time.Duration
-	pollInterval    time.Duration
-	sessionID       string // WO-98: runtime session ID used for live inbox polling.
-	operatorToken   string
-	workerToken     string // WO-98: RoleWorker bearer token for live ask inbox reads.
-	answerPublicKey string
-	answerKeyFile   string // WO-108: local dogfood reads the answerer key without manual copy.
-	insecure        bool   // WO-104: allow tokenless live ask against a serve --auth-disabled server.
+	from               string
+	to                 string
+	questionType       string
+	repoPath           string
+	serverURL          string
+	offline            bool
+	timeout            time.Duration
+	pollInterval       time.Duration
+	sessionID          string // WO-98: runtime session ID used for live inbox polling.
+	operatorToken      string
+	workerToken        string // WO-98: RoleWorker bearer token for live ask inbox reads.
+	answerPublicKey    string
+	answerKeyFile      string // WO-108: local dogfood reads the answerer key without manual copy.
+	knownAnswerersFile string // WO-122: tests pin outside the operator's known_answerers file.
+	insecure           bool   // WO-104: allow tokenless live ask against a serve --auth-disabled server.
 }
 
 // WO-84: askExchange is the local fixture transport for the first ask->answer slice.
@@ -104,6 +110,7 @@ type askLiveTransport struct {
 	client        askHTTPDoer
 	now           func() time.Time
 	sleep         func(time.Duration)
+	trustLog      io.Writer
 	registered    map[string]struct{} // WO-108: avoid duplicate self-registration inside one ask run.
 }
 
@@ -178,6 +185,7 @@ func newAskCommand() *cobra.Command {
 						client:        askHTTPClient,
 						now:           askNow,
 						sleep:         askSleep,
+						trustLog:      cmd.ErrOrStderr(),
 						registered:    make(map[string]struct{}),
 					},
 				)
@@ -219,6 +227,12 @@ func newAskCommand() *cobra.Command {
 		"",
 		"path containing the base64 ed25519 public key expected to sign the answer",
 	) // WO-108: local dogfood can consume the answerer's key file without hand-copying.
+	cmd.Flags().StringVar(
+		&options.knownAnswerersFile,
+		"known-answerers-file",
+		"",
+		"path to the known_answerers pin file",
+	) // WO-122: testable override for local answerer trust pins.
 	cmd.Flags().BoolVar(&options.insecure, "insecure", false, "allow tokenless live ask against a serve --auth-disabled server") // WO-104: match serve --auth-disabled on the dogfood path.
 
 	return cmd
@@ -301,9 +315,15 @@ func buildLiveAskExchange(
 		return askExchange{}, errors.New("sent_at is required")
 	}
 
-	answerPublicKey, err := parseAskPublicKey(options.answerPublicKey)
-	if err != nil {
-		return askExchange{}, err
+	var answerPublicKey ed25519.PublicKey
+	var answerPublicKeyEncoded string
+	if options.answerPublicKey != "" {
+		var err error
+		answerPublicKey, err = parseAskPublicKey(options.answerPublicKey)
+		if err != nil {
+			return askExchange{}, err
+		}
+		answerPublicKeyEncoded = base64.StdEncoding.EncodeToString(answerPublicKey)
 	}
 
 	queryPublicKey, queryPrivateKey, err := ed25519.GenerateKey(random)
@@ -316,14 +336,31 @@ func buildLiveAskExchange(
 		return askExchange{}, err
 	}
 	queryPublicKeyEncoded := base64.StdEncoding.EncodeToString(queryPublicKey)
-	answerPublicKeyEncoded := base64.StdEncoding.EncodeToString(answerPublicKey)
 
 	// WO-108: only the explicit insecure dogfood path self-provisions an asker session.
 	if err := transport.registerAskerSession(options); err != nil {
 		return askExchange{}, err
 	}
-	if err := transport.sendQuery(query, options); err != nil {
+	sendResponse, err := transport.sendQuery(query, options)
+	if err != nil {
 		return askExchange{}, err
+	}
+	if answerPublicKey == nil {
+		resolvedKey, err := answerPublicKeyFromSendResponse(sendResponse, options.to)
+		if err != nil {
+			return askExchange{}, err
+		}
+		answerPublicKey, err = pinResolvedAnswerKey(
+			options.to,
+			resolvedKey,
+			options.knownAnswerersFile,
+			transport.clock()(),
+			transport.trustLog,
+		)
+		if err != nil {
+			return askExchange{}, err
+		}
+		answerPublicKeyEncoded = base64.StdEncoding.EncodeToString(answerPublicKey)
 	}
 
 	answerResult, err := transport.awaitAnswer(query, answerPublicKey, options)
@@ -542,10 +579,10 @@ func (transport askLiveTransport) registerAskerSession(options askOptions) error
 func (transport askLiveTransport) sendQuery(
 	query model.Envelope,
 	options askOptions,
-) error {
+) (askSendAgentMessageResponse, error) {
 	body, err := json.Marshal(query)
 	if err != nil {
-		return err
+		return askSendAgentMessageResponse{}, err
 	}
 
 	requestPayload, err := json.Marshal(askSendAgentMessageRequest{
@@ -556,16 +593,16 @@ func (transport askLiveTransport) sendQuery(
 		Body:                string(body),
 	})
 	if err != nil {
-		return err
+		return askSendAgentMessageResponse{}, err
 	}
 
 	endpoint, err := askServerEndpoint(transport.baseURL, "/v0/agents/messages/send")
 	if err != nil {
-		return err
+		return askSendAgentMessageResponse{}, err
 	}
 	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(requestPayload))
 	if err != nil {
-		return err
+		return askSendAgentMessageResponse{}, err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	if strings.TrimSpace(transport.operatorToken) != "" {
@@ -574,22 +611,22 @@ func (transport askLiveTransport) sendQuery(
 
 	response, err := transport.httpClient().Do(request)
 	if err != nil {
-		return fmt.Errorf("send live ask query: %w", err)
+		return askSendAgentMessageResponse{}, fmt.Errorf("send live ask query: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
-		return err
+		return askSendAgentMessageResponse{}, err
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("send live ask query failed: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
+		return askSendAgentMessageResponse{}, fmt.Errorf("send live ask query failed: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
 
 	var sendResponse askSendAgentMessageResponse
 	if len(strings.TrimSpace(string(responseBody))) > 0 {
 		if err := json.Unmarshal(responseBody, &sendResponse); err != nil {
-			return fmt.Errorf("send live ask response must be json: %w", err)
+			return askSendAgentMessageResponse{}, fmt.Errorf("send live ask response must be json: %w", err)
 		}
 	}
 	if sendResponse.Status != "" && !strings.EqualFold(sendResponse.Status, "ok") &&
@@ -603,10 +640,10 @@ func (transport askLiveTransport) sendQuery(
 		if message == "" {
 			message = sendResponse.Status
 		}
-		return fmt.Errorf("send live ask query failed: %s", message)
+		return askSendAgentMessageResponse{}, fmt.Errorf("send live ask query failed: %s", message)
 	}
 
-	return nil
+	return sendResponse, nil
 }
 
 func (transport askLiveTransport) awaitAnswer(
@@ -1101,6 +1138,142 @@ func parseAskPublicKey(encoded string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(decoded), nil
 }
 
+func answerPublicKeyFromSendResponse(response askSendAgentMessageResponse, agentID string) (string, error) {
+	var message struct {
+		TargetAnswerPublicKey string `json:"target_answer_public_key"`
+	}
+	if len(response.Message) > 0 {
+		if err := json.Unmarshal(response.Message, &message); err != nil {
+			return "", fmt.Errorf("decode live ask send response message: %w", err)
+		}
+	}
+	resolvedKey := strings.TrimSpace(message.TargetAnswerPublicKey)
+	if resolvedKey == "" {
+		return "", fmt.Errorf("answer public key for agent %s is not available from bus session record", agentID)
+	}
+
+	return resolvedKey, nil
+}
+
+func pinResolvedAnswerKey(
+	agentID string,
+	encodedKey string,
+	knownAnswerersFile string,
+	now time.Time,
+	log io.Writer,
+) (ed25519.PublicKey, error) {
+	publicKey, err := parseAskPublicKey(encodedKey)
+	if err != nil {
+		return nil, err
+	}
+	path, err := knownAnswerersPath(knownAnswerersFile)
+	if err != nil {
+		return nil, err
+	}
+
+	pinnedKey, found, err := loadKnownAnswererPin(path, agentID)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		pinnedPublicKey, err := parseAskPublicKey(pinnedKey)
+		if err != nil {
+			return nil, fmt.Errorf("known answerer pin for agent %s is invalid: %w", agentID, err)
+		}
+		if bytes.Equal(pinnedPublicKey, publicKey) {
+			return publicKey, nil
+		}
+		return nil, fmt.Errorf(
+			"answer key mismatch for agent %s: pinned %s, bus offers %s -- possible impersonation; if the answerer legitimately rotated keys, remove the entry from %s",
+			agentID,
+			answerKeyFingerprint(pinnedPublicKey),
+			answerKeyFingerprint(publicKey),
+			path,
+		)
+	}
+
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	canonicalKey := base64.StdEncoding.EncodeToString(publicKey)
+	if err := appendKnownAnswererPin(path, agentID, canonicalKey, now.UTC()); err != nil {
+		return nil, err
+	}
+	if log != nil {
+		_, _ = fmt.Fprintf(log, "pinned agent_id=%s fingerprint=%s\n", agentID, answerKeyFingerprint(publicKey))
+	}
+
+	return publicKey, nil
+}
+
+func knownAnswerersPath(path string) (string, error) {
+	if strings.TrimSpace(path) != "" {
+		return strings.TrimSpace(path), nil
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve known_answerers path: %w", err)
+	}
+
+	return filepath.Join(homeDir, ".hivebus", "known_answerers"), nil
+}
+
+func loadKnownAnswererPin(path string, agentID string) (string, bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read known_answerers: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for lineNumber, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			return "", false, fmt.Errorf("known_answerers line %d must be: agent_id base64-key first-seen-rfc3339", lineNumber+1)
+		}
+		if _, err := time.Parse(time.RFC3339, fields[2]); err != nil {
+			return "", false, fmt.Errorf("known_answerers line %d first-seen must be RFC3339: %w", lineNumber+1, err)
+		}
+		if fields[0] == agentID {
+			return fields[1], true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
+func appendKnownAnswererPin(path string, agentID string, encodedKey string, firstSeen time.Time) error {
+	if err := os.MkdirAll(filepath.Dir(path), knownAnswerersDirMode); err != nil {
+		return fmt.Errorf("create known_answerers directory: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, knownAnswerersFileMode)
+	if err != nil {
+		return fmt.Errorf("open known_answerers: %w", err)
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	if err := file.Chmod(knownAnswerersFileMode); err != nil {
+		return fmt.Errorf("chmod known_answerers: %w", err)
+	}
+	if _, err := fmt.Fprintf(file, "%s %s %s\n", agentID, encodedKey, firstSeen.Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("write known_answerers: %w", err)
+	}
+
+	return nil
+}
+
+func answerKeyFingerprint(publicKey ed25519.PublicKey) string {
+	sum := sha256.Sum256(publicKey)
+	return hex.EncodeToString(sum[:])
+}
+
 func (options *askOptions) loadAnswerKeyFile() error {
 	if options.answerKeyFile == "" {
 		return nil
@@ -1179,6 +1352,7 @@ func (options *askOptions) normalize() {
 	options.workerToken = strings.TrimSpace(options.workerToken)
 	options.answerPublicKey = strings.TrimSpace(options.answerPublicKey)
 	options.answerKeyFile = strings.TrimSpace(options.answerKeyFile)
+	options.knownAnswerersFile = strings.TrimSpace(options.knownAnswerersFile)
 }
 
 func (options askOptions) validate() error {
@@ -1203,8 +1377,6 @@ func (options askOptions) validate() error {
 		return errors.New("operator-token is required for live ask send (or pass --insecure for a serve --auth-disabled server)")
 	case options.useLiveDelivery() && !options.insecure && options.workerToken == "":
 		return errors.New("worker-token is required for live ask inbox polling (or pass --insecure for a serve --auth-disabled server)")
-	case options.useLiveDelivery() && options.answerPublicKey == "":
-		return errors.New("answer-public-key is required for live ask verification")
 	default:
 		return nil
 	}

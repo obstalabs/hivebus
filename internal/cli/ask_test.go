@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -126,6 +127,7 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 	withDeterministicAskRuntime(t)
 
 	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(7)
+	knownAnswerersFile := filepath.Join(t.TempDir(), "known_answerers")
 	var sentRequest askSendAgentMessageRequest
 	var sentQuery model.Envelope
 	var rawSentRequest map[string]json.RawMessage
@@ -224,6 +226,7 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 		"--operator-token", "operator-token",
 		"--worker-token", "worker-token",
 		"--answer-public-key", base64.StdEncoding.EncodeToString(answerPublicKey),
+		"--known-answerers-file", knownAnswerersFile,
 	})
 	cmd.SetIn(strings.NewReader("which workledger checkout is canonical and what's HEAD?\n"))
 
@@ -268,6 +271,232 @@ func TestAskCommandPostsSignedQueryAndVerifiesLiveAnswer(t *testing.T) {
 	queryPublicKey := decodeAskPublicKey(t, exchange.QueryPublicKey)
 	if err := model.VerifyEnvelope(sentQuery, queryPublicKey); err != nil {
 		t.Fatalf("VerifyEnvelope(sent query) error = %v", err)
+	}
+	if _, err := os.Stat(knownAnswerersFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("known_answerers stat error = %v, want not exist", err)
+	}
+}
+
+func TestAskCommandPinsResolvedAnswerKeyOnFirstUse(t *testing.T) {
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(33)
+	encodedAnswerKey := base64.StdEncoding.EncodeToString(answerPublicKey)
+	knownAnswerersFile := filepath.Join(t.TempDir(), "known_answerers")
+	var sentQuery model.Envelope
+
+	serverURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
+			var request askSendAgentMessageRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatalf("Decode(send request) error = %v", err)
+			}
+			if err := json.Unmarshal([]byte(request.Body), &sentQuery); err != nil {
+				t.Fatalf("Unmarshal(query body) error = %v", err)
+			}
+			writeJSONResponse(t, w, map[string]any{
+				"status": "queued",
+				"message": map[string]string{
+					"message_id":               request.MessageID,
+					"body":                     request.Body,
+					"target_answer_public_key": encodedAnswerKey,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/agents/sessions/asker-session/inbox":
+			answer := signLiveAskAnswer(
+				t,
+				sentQuery,
+				json.RawMessage(`{"answer":"pinned live answer","answered_by":"workledger/agent","question_type":"canonical_repo","read_only":true}`),
+				answerPrivateKey,
+			)
+			answerBody, err := json.Marshal(answer)
+			if err != nil {
+				t.Fatalf("Marshal(answer) error = %v", err)
+			}
+			writeJSONResponse(t, w, map[string]any{
+				"messages": []map[string]any{
+					{
+						"message": map[string]string{
+							"message_id": "answer-live",
+							"body":       string(answerBody),
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+
+	cmd := newAskCommand()
+	cmd.SetArgs([]string{
+		"--server", serverURL,
+		"--to", "workledger/agent",
+		"--from", "architect/agent",
+		"--type", "canonical_repo",
+		"--session-id", "asker-session",
+		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
+		"--known-answerers-file", knownAnswerersFile,
+	})
+	cmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))
+
+	var output bytes.Buffer
+	var logs bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&logs)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("ask command error = %v", err)
+	}
+	if !strings.Contains(output.String(), "pinned live answer") {
+		t.Fatalf("ask output = %s, want pinned live answer", output.String())
+	}
+	fingerprint := answerKeyFingerprint(answerPublicKey)
+	if !strings.Contains(logs.String(), "pinned agent_id=workledger/agent fingerprint="+fingerprint) {
+		t.Fatalf("ask stderr = %q, want pinned fingerprint line", logs.String())
+	}
+	pinData, err := os.ReadFile(knownAnswerersFile)
+	if err != nil {
+		t.Fatalf("ReadFile(known_answerers) error = %v", err)
+	}
+	wantPin := "workledger/agent " + encodedAnswerKey + " " + fixedAskTime().Format(time.RFC3339) + "\n"
+	if string(pinData) != wantPin {
+		t.Fatalf("known_answerers = %q, want %q", string(pinData), wantPin)
+	}
+	info, err := os.Stat(knownAnswerersFile)
+	if err != nil {
+		t.Fatalf("Stat(known_answerers) error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != knownAnswerersFileMode {
+		t.Fatalf("known_answerers mode = %o, want %o", got, knownAnswerersFileMode)
+	}
+}
+
+func TestAskCommandRejectsResolvedAnswerKeyMismatch(t *testing.T) {
+	withDeterministicAskRuntime(t)
+
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(34)
+	encodedAnswerKey := base64.StdEncoding.EncodeToString(answerPublicKey)
+	roguePublicKey, _ := deterministicAskSigningKey(35)
+	encodedRogueKey := base64.StdEncoding.EncodeToString(roguePublicKey)
+	knownAnswerersFile := filepath.Join(t.TempDir(), "known_answerers")
+
+	var firstQuery model.Envelope
+	firstServerURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
+			var request askSendAgentMessageRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatalf("Decode(first send request) error = %v", err)
+			}
+			if err := json.Unmarshal([]byte(request.Body), &firstQuery); err != nil {
+				t.Fatalf("Unmarshal(first query body) error = %v", err)
+			}
+			writeJSONResponse(t, w, map[string]any{
+				"status": "queued",
+				"message": map[string]string{
+					"message_id":               request.MessageID,
+					"body":                     request.Body,
+					"target_answer_public_key": encodedAnswerKey,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/agents/sessions/asker-session/inbox":
+			answer := signLiveAskAnswer(
+				t,
+				firstQuery,
+				json.RawMessage(`{"answer":"first pinned answer","answered_by":"workledger/agent","question_type":"canonical_repo","read_only":true}`),
+				answerPrivateKey,
+			)
+			answerBody, err := json.Marshal(answer)
+			if err != nil {
+				t.Fatalf("Marshal(first answer) error = %v", err)
+			}
+			writeJSONResponse(t, w, map[string]any{
+				"messages": []map[string]any{{"message": map[string]string{"body": string(answerBody)}}},
+			})
+		default:
+			t.Fatalf("unexpected first request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+
+	firstCmd := newAskCommand()
+	firstCmd.SetArgs([]string{
+		"--server", firstServerURL,
+		"--to", "workledger/agent",
+		"--from", "architect/agent",
+		"--type", "canonical_repo",
+		"--session-id", "asker-session",
+		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
+		"--known-answerers-file", knownAnswerersFile,
+	})
+	firstCmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))
+	var firstOutput bytes.Buffer
+	firstCmd.SetOut(&firstOutput)
+	if err := firstCmd.Execute(); err != nil {
+		t.Fatalf("first ask command error = %v", err)
+	}
+
+	pinBefore, err := os.ReadFile(knownAnswerersFile)
+	if err != nil {
+		t.Fatalf("ReadFile(pin before) error = %v", err)
+	}
+
+	secondServerURL := withAskHTTPHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/agents/messages/send":
+			var request askSendAgentMessageRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatalf("Decode(second send request) error = %v", err)
+			}
+			writeJSONResponse(t, w, map[string]any{
+				"status": "queued",
+				"message": map[string]string{
+					"message_id":               request.MessageID,
+					"body":                     request.Body,
+					"target_answer_public_key": encodedRogueKey,
+				},
+			})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/inbox"):
+			t.Fatal("ask should reject key mismatch before polling inbox")
+		default:
+			t.Fatalf("unexpected second request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+
+	secondCmd := newAskCommand()
+	secondCmd.SetArgs([]string{
+		"--server", secondServerURL,
+		"--to", "workledger/agent",
+		"--from", "architect/agent",
+		"--type", "canonical_repo",
+		"--session-id", "asker-session",
+		"--operator-token", "operator-token",
+		"--worker-token", "worker-token",
+		"--known-answerers-file", knownAnswerersFile,
+	})
+	secondCmd.SetIn(strings.NewReader("which workledger checkout is canonical?\n"))
+
+	err = secondCmd.Execute()
+	if err == nil {
+		t.Fatal("second ask command expected key mismatch")
+	}
+	for _, want := range []string{"answer key mismatch for agent workledger/agent", "pinned ", "bus offers ", "possible impersonation"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("second ask error = %q, want %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "signature") {
+		t.Fatalf("second ask error = %q, want key mismatch not signature failure", err)
+	}
+	pinAfter, err := os.ReadFile(knownAnswerersFile)
+	if err != nil {
+		t.Fatalf("ReadFile(pin after) error = %v", err)
+	}
+	if string(pinAfter) != string(pinBefore) {
+		t.Fatalf("known_answerers changed after mismatch: before %q after %q", string(pinBefore), string(pinAfter))
 	}
 }
 
@@ -506,7 +735,7 @@ func TestAskCommandRejectsLiveAskWithoutRuntimeSessionAuth(t *testing.T) {
 }
 
 // WO-104: --insecure relaxes the token requirement so the dogfood path matches a
-// serve --auth-disabled server, but session-id and answer-public-key stay required.
+// serve --auth-disabled server, but session-id stays required.
 func TestAskCommandInsecureAllowsTokenlessLiveAsk(t *testing.T) {
 	answerPublicKey, _ := deterministicAskSigningKey(12)
 	base := askOptions{
@@ -539,8 +768,8 @@ func TestAskCommandInsecureAllowsTokenlessLiveAsk(t *testing.T) {
 
 	missingKey := base
 	missingKey.answerPublicKey = ""
-	if err := missingKey.validate(); err == nil || !strings.Contains(err.Error(), "answer-public-key is required") {
-		t.Fatalf("insecure missing answer-public-key validate() error = %v, want answer-public-key required", err)
+	if err := missingKey.validate(); err != nil {
+		t.Fatalf("insecure missing answer-public-key validate() error = %v, want nil", err)
 	}
 }
 
