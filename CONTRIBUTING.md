@@ -43,3 +43,25 @@ When in doubt, assume the change belongs out of tree until a tracked work order 
 ## Commit Style
 
 Use conventional commits such as `feat: add signed envelope verification`.
+
+## Developer Certificate of Origin
+
+Hivebus is MIT, and contributions are accepted under the same license:
+inbound equals outbound. To certify that you wrote the patch or otherwise have
+the right to submit it under MIT, sign off every commit with the Developer
+Certificate of Origin (DCO, https://developercertificate.org):
+
+```
+git commit -s -m "feat: ..."
+```
+
+The `-s` flag appends a trailer to the commit message:
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+By signing off you agree to the DCO 1.1 text: you certify that the contribution
+is your original work, or is based on prior work under a compatible open-source
+license, and that you have the right to submit it under MIT. CI rejects pull
+request commits without a `Signed-off-by` trailer.
