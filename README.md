@@ -137,6 +137,42 @@ The recovery capsule contains verified diagnosis, evidence refs, stale/rejected 
 
 ## Architecture
 
+The point of Hivebus is that **agents can ask each other questions instead of working
+blind**. One agent asks another -- "which checkout is canonical? what HEAD are you on?
+are you done?" -- and gets a signed answer back, instead of crawling the other repo,
+re-deriving state, or interrupting a human to relay. The bus carries the question and the
+answer, verifies provenance at the edges, and decides nothing itself.
+
+Direct ask/answer:
+
+```text
+asker agent
+  -> signs a read-only query envelope (e.g. repo_status) and addresses it to another agent
+  -> the bus delivers it; delivery is the whole job, a no-answer is still a success
+
+answerer agent
+  -> resolves the question from what it observes now (git read at answer time)
+  -> binds the observed world into the signed payload: repo id, absolute git dir,
+     device + inode, observed_at, trust class (tool_asserted vs model_inferred)
+
+asker verification
+  -> checks the signature, then the observation context: does the world this card
+     describes match the repository it addressed? a wrong checkout is rejected,
+     distinctly from a signature failure -- and the verification level is reported,
+     never silently downgraded
+```
+
+In the open core, an answerer is a small sidecar that resolves deterministic questions
+(repo state, file provenance) from disk. The deeper move -- letting a **live agent
+session answer from its own warm context** ("what am I actually working on? which approach
+did I pick?"), and bridging the running sessions of vendor agents into the bus -- is
+live-session integration, which lives out of tree under the
+[boundary charter](docs/BOUNDARY.md). The open bus makes agents talk; connecting their
+live working sessions is the commercial layer ([NeuroRouter](https://neurorouter.dev) /
+[Obsta Labs](https://obstalabs.dev)).
+
+Issue intake to tracked work (the coordination surface):
+
 ```text
 nullbot collector
   -> creates a thread and evidence bundle
@@ -163,8 +199,11 @@ optional execution integration
 Current code layout:
 
 - `cmd/hivebus`: minimal CLI entrypoint
-- `internal/model`: envelopes, threads, artifacts, diagnoses, recovery capsules
-- `internal/runtime`: v0 HTTP handlers for intake, promotion, dispatch, thread creation, append, and replay
+- `internal/cli`: the `serve`, `ask`, `answer`, and `watch` commands; the ask/answer
+  resolvers, answer-key pinning, and observation-context verification
+- `internal/model`: envelopes, threads, artifacts, diagnoses, recovery capsules, signing
+- `internal/runtime`: v0 HTTP handlers for intake, promotion, dispatch, agent sessions,
+  inbox/delivery, thread creation, append, and replay
 - `internal/policy`: free, pro, teams, enterprise limits
 - `internal/spec`: exported v0 contract and sample case bundle
 - `internal/store`: SQLite append-only event log, deterministic replay, and verified recovery projections
