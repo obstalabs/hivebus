@@ -20,6 +20,8 @@
 - `hivebus ask --server` now exits 0 for delivered queries with no trusted answer and reports `delivered=true`, `answers=0`; delivery failures still exit non-zero.
 - `hivebus ask --server` now prefers a later valid signed answer over an earlier unverified candidate in the same inbox batch.
 - `hivebus answer --print-public-key` now requires `--signing-key` instead of printing a throwaway random key.
+- Module path migrated to `github.com/obstalabs/hivebus`; LICENSE copyright is `Obsta Labs LLC`.
+- Contributions now require a Developer Certificate of Origin sign-off (`git commit -s`); CI rejects unsigned-off pull request commits.
 
 ## [0.2.0] - 2026-04-20
 
