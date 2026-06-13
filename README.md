@@ -242,7 +242,7 @@ Background analysis and live-session orchestration are out of tree. They can con
 ## Known Limitations
 
 - The v0 runtime is HTTP-only and intentionally small: nullbot intake, thread promotion, dispatch, append, and replay.
-- Envelope signatures are represented structurally but not cryptographically verified yet.
+- Runtime HTTP intake (`internal/runtime`) authenticates signed API-key tokens but does not yet cryptographically verify posted envelope signatures. The `ask`/`answer` CLI path does verify them (see [docs/specs/observation-context-v0.md](docs/specs/observation-context-v0.md)).
 - The workledger bridge requires explicit `WORKLEDGER_URL` or `WORKLEDGER_HOST` plus `WORKLEDGER_API_KEY` configuration on the runtime host.
 - Optional execution sync is exposed as a hook surface, not a bundled core-runtime integration.
 - Capability routing is still declarative rather than runtime-driven.
