@@ -38,6 +38,17 @@ const (
 	askResponseStatusAnswered   = "answered"   // WO-109: a verified response is present.
 	askResponseStatusNoAnswer   = "no_answer"  // WO-109: delivery succeeded but no neuron answered.
 	askResponseStatusUnverified = "unverified" // WO-109: delivery succeeded but response provenance failed.
+
+	// WO-123: name the observation-context binding level that actually ran, so a
+	// weaker verify is never a silent downgrade. Mirror, not oracle.
+	askBindingLevelInode  = "git_dir_inode" // asker statted the same .git: dev+ino matched.
+	askBindingLevelPath   = "git_dir_path"  // absolute_git_dir path compared, inode unavailable.
+	askBindingLevelRepoID = "repo_id_only"  // asker could not resolve the repo locally: string compare only.
+
+	// WO-123: remote-fingerprint check outcome. A mismatch is a hard error, so the
+	// only surfaced values are a confirmed match or an unavailable expectation.
+	askRemoteCheckMatch       = "match"       // expected remote matched the signed remote.
+	askRemoteCheckUnavailable = "unavailable" // no expected remote was set or derivable.
 )
 
 var (
@@ -54,6 +65,7 @@ type askOptions struct {
 	to                 string
 	questionType       string
 	repoPath           string
+	expectRemote       string // WO-123: operator-asserted remote URL anchor for cross-machine asks.
 	serverURL          string
 	offline            bool
 	timeout            time.Duration
@@ -76,11 +88,20 @@ type askExchange struct {
 	Answers           int            `json:"answers"`                      // WO-109: trusted response count, not delivery success.
 	ResponseStatus    string         `json:"response_status"`              // WO-109: distinguish no answer from untrusted response provenance.
 	VerificationError string         `json:"verification_error,omitempty"` // WO-109: untrusted responses are provenance failures, not delivery failures.
+	BindingLevel      string         `json:"binding_level,omitempty"`      // WO-123: which observation-context level actually verified.
+	RemoteCheck       string         `json:"remote_check,omitempty"`       // WO-123: remote-fingerprint check outcome (match | unavailable).
 	Query             model.Envelope `json:"query"`
 	Answer            model.Envelope `json:"answer"`
 	QueryPublicKey    string         `json:"query_public_key"`
 	AnswerPublicKey   string         `json:"answer_public_key"`
 	DeferredFollowups []string       `json:"deferred_followups"`
+}
+
+// observationVerification reports how far the asker's observation-context check got,
+// so a weaker verify level is named in output rather than silently accepted (WO-123).
+type observationVerification struct {
+	BindingLevel string // askBindingLevel*: empty for non-repo_status asks.
+	RemoteCheck  string // askRemoteCheck*: empty for non-repo_status asks.
 }
 
 // WO-84: query payload has no requested_action or executable field by construction.
@@ -120,6 +141,8 @@ type askAnswerWaitResult struct {
 	Answer            model.Envelope
 	Found             bool
 	VerificationError string
+	BindingLevel      string // WO-123: observation-context level that verified the found answer.
+	RemoteCheck       string // WO-123: remote-fingerprint check outcome for the found answer.
 }
 
 // WO-97: signed query envelope travels through the runtime send message contract.
@@ -204,10 +227,11 @@ func newAskCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&options.to, "to", "", "target agent identity")                                      // WO-84: target warm agent.
-	cmd.Flags().StringVar(&options.from, "from", defaultAskFrom, "asking agent identity")                      // WO-84: attributable asker.
-	cmd.Flags().StringVar(&options.questionType, "type", defaultAskQuestionType, "question type label")        // WO-84: bounded query intent label.
-	cmd.Flags().StringVar(&options.repoPath, "repo", "", "addressed repository path for repo_status answers")  // WO-119: bind repo_status verification to an addressed worktree.
+	cmd.Flags().StringVar(&options.to, "to", "", "target agent identity")                                     // WO-84: target warm agent.
+	cmd.Flags().StringVar(&options.from, "from", defaultAskFrom, "asking agent identity")                     // WO-84: attributable asker.
+	cmd.Flags().StringVar(&options.questionType, "type", defaultAskQuestionType, "question type label")       // WO-84: bounded query intent label.
+	cmd.Flags().StringVar(&options.repoPath, "repo", "", "addressed repository path for repo_status answers") // WO-119: bind repo_status verification to an addressed worktree.
+	cmd.Flags().StringVar(&options.expectRemote, "expect-remote", "", "expected remote URL the answer must report (WO-123: cross-machine anchor)")
 	cmd.Flags().StringVar(&options.serverURL, "server", "", "hivebus server URL for live delivery")            // WO-94: opt into server-backed ask.
 	cmd.Flags().BoolVar(&options.offline, "offline", false, "use the in-process fixture answer")               // WO-94: preserve fixture path.
 	cmd.Flags().DurationVar(&options.timeout, "timeout", defaultAskLiveTimeout, "live answer timeout")         // WO-94: bounded live wait.
@@ -389,6 +413,8 @@ func buildLiveAskExchange(
 		exchange.Answers = 1
 		exchange.ResponseStatus = askResponseStatusAnswered
 		exchange.VerificationError = ""
+		exchange.BindingLevel = answerResult.BindingLevel // WO-123: name the level that verified.
+		exchange.RemoteCheck = answerResult.RemoteCheck
 	}
 
 	return exchange, nil
@@ -666,14 +692,20 @@ func (transport askLiveTransport) awaitAnswer(
 			if !isLiveAskAnswerCandidate(query, answer) {
 				continue
 			}
-			if err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, now(), options.repoPath); err != nil {
+			verification, err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, now(), options.repoPath, options.expectRemote)
+			if err != nil {
 				if verificationError == "" {
 					verificationError = err.Error()
 				}
 				continue
 			}
 
-			return askAnswerWaitResult{Answer: answer, Found: true}, nil
+			return askAnswerWaitResult{
+				Answer:       answer,
+				Found:        true,
+				BindingLevel: verification.BindingLevel,
+				RemoteCheck:  verification.RemoteCheck,
+			}, nil
 		}
 
 		if !now().Before(deadline) || attempt+1 >= maxPolls {
@@ -756,7 +788,9 @@ func validateLiveAskAnswer(
 	answerPublicKey ed25519.PublicKey,
 	now time.Time,
 ) error {
-	return validateLiveAskAnswerForRepo(query, answer, answerPublicKey, now, "")
+	_, err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, now, "", "")
+
+	return err
 }
 
 func validateLiveAskAnswerForRepo(
@@ -765,30 +799,28 @@ func validateLiveAskAnswerForRepo(
 	answerPublicKey ed25519.PublicKey,
 	now time.Time,
 	addressedRepoPath string,
-) error {
+	expectRemote string,
+) (observationVerification, error) {
 	if answer.Type != model.MessageTypeAnswer {
-		return fmt.Errorf("answer type = %q, want %q", answer.Type, model.MessageTypeAnswer)
+		return observationVerification{}, fmt.Errorf("answer type = %q, want %q", answer.Type, model.MessageTypeAnswer)
 	}
 	if answer.ReplyTo != query.MessageID {
-		return fmt.Errorf("answer reply_to = %q, want %q", answer.ReplyTo, query.MessageID)
+		return observationVerification{}, fmt.Errorf("answer reply_to = %q, want %q", answer.ReplyTo, query.MessageID)
 	}
 	if answer.ThreadID != query.ThreadID {
-		return fmt.Errorf("answer thread_id = %q, want %q", answer.ThreadID, query.ThreadID)
+		return observationVerification{}, fmt.Errorf("answer thread_id = %q, want %q", answer.ThreadID, query.ThreadID)
 	}
 	if err := validateLiveAskAnswerRoute(query, answer); err != nil {
-		return err
+		return observationVerification{}, err
 	}
 	if err := model.VerifyEnvelope(answer, answerPublicKey); err != nil {
-		return fmt.Errorf("answer signature verification failed: %w", err)
+		return observationVerification{}, fmt.Errorf("answer signature verification failed: %w", err)
 	}
 	if answer.Deadline != nil && now.After(*answer.Deadline) {
-		return errors.New("answer is expired")
-	}
-	if err := validateLiveAskRepoStatusObservation(query, answer, now, addressedRepoPath); err != nil {
-		return err
+		return observationVerification{}, errors.New("answer is expired")
 	}
 
-	return nil
+	return validateLiveAskRepoStatusObservation(query, answer, now, addressedRepoPath, expectRemote)
 }
 
 func validateLiveAskRepoStatusObservation(
@@ -796,73 +828,81 @@ func validateLiveAskRepoStatusObservation(
 	answer model.Envelope,
 	now time.Time,
 	addressedRepoPath string,
-) error {
+	expectRemote string,
+) (observationVerification, error) {
 	queryPayload, err := decodeAskQueryPayload(query.Payload)
 	if err != nil {
-		return err
+		return observationVerification{}, err
 	}
 	if !isRepoStatusQuestionType(queryPayload.QuestionType) {
-		return nil
+		return observationVerification{}, nil
 	}
 
 	if strings.TrimSpace(addressedRepoPath) == "" {
-		return errors.New("repo_status addressed repo is required")
+		return observationVerification{}, errors.New("repo_status addressed repo is required")
 	}
 	addressedRepoID, err := canonicalRepoPath(addressedRepoPath)
 	if err != nil {
-		return fmt.Errorf("resolve addressed repo: %w", err)
+		return observationVerification{}, fmt.Errorf("resolve addressed repo: %w", err)
 	}
 
 	var payload repoStatusAnswerPayload
 	if err := json.Unmarshal(answer.Payload, &payload); err != nil {
-		return fmt.Errorf("repo_status payload must be json: %w", err)
+		return observationVerification{}, fmt.Errorf("repo_status payload must be json: %w", err)
 	}
 	if payload.TrustClass != answerTrustClassToolAsserted {
-		return fmt.Errorf("repo_status trust_class = %q, want %q", payload.TrustClass, answerTrustClassToolAsserted)
+		return observationVerification{}, fmt.Errorf("repo_status trust_class = %q, want %q", payload.TrustClass, answerTrustClassToolAsserted)
 	}
 	if !payload.ReadOnly {
-		return errors.New("repo_status payload must be read_only")
+		return observationVerification{}, errors.New("repo_status payload must be read_only")
 	}
 	if !isRepoStatusQuestionType(payload.QuestionType) {
-		return fmt.Errorf("repo_status question_type = %q, want repo_status", payload.QuestionType)
+		return observationVerification{}, fmt.Errorf("repo_status question_type = %q, want repo_status", payload.QuestionType)
 	}
 	if strings.TrimSpace(payload.RepoID) == "" {
-		return errors.New("repo_status repo_id is required")
+		return observationVerification{}, errors.New("repo_status repo_id is required")
 	}
 	if payload.RepoID != addressedRepoID {
-		return fmt.Errorf("answer observed wrong repo: %s != %s", payload.RepoID, addressedRepoID)
+		return observationVerification{}, fmt.Errorf("answer observed wrong repo: %s != %s", payload.RepoID, addressedRepoID)
 	}
 	if strings.TrimSpace(payload.GitHeadSHA) == "" {
-		return errors.New("repo_status git_head_sha is required")
+		return observationVerification{}, errors.New("repo_status git_head_sha is required")
 	}
 	if strings.TrimSpace(payload.Head.Full) != "" && payload.GitHeadSHA != payload.Head.Full {
-		return fmt.Errorf("repo_status git_head_sha = %q, want head.full %q", payload.GitHeadSHA, payload.Head.Full)
+		return observationVerification{}, fmt.Errorf("repo_status git_head_sha = %q, want head.full %q", payload.GitHeadSHA, payload.Head.Full)
 	}
 	if strings.TrimSpace(payload.AbsoluteGitDir) == "" {
-		return errors.New("repo_status absolute_git_dir is required")
+		return observationVerification{}, errors.New("repo_status absolute_git_dir is required")
 	}
 	if payload.ObservedAt.IsZero() {
-		return errors.New("repo_status observed_at is required")
+		return observationVerification{}, errors.New("repo_status observed_at is required")
 	}
 	if payload.ExpiresAt.IsZero() {
-		return errors.New("repo_status expires_at is required")
+		return observationVerification{}, errors.New("repo_status expires_at is required")
 	}
 	if now.After(payload.ExpiresAt) {
-		return errors.New("repo_status observation is expired")
+		return observationVerification{}, errors.New("repo_status observation is expired")
+	}
+
+	// WO-123: remote-fingerprint anchor. Hard-reject a mismatch whenever an expectation
+	// is explicit or locally derivable; only an absent expectation is named unavailable.
+	remoteCheck, err := verifyRepoStatusRemote(addressedRepoID, expectRemote, payload.Remote)
+	if err != nil {
+		return observationVerification{}, err
 	}
 
 	expectedGitDir, expectedDev, expectedIno, resolved := addressedRepoGitIdentity(context.Background(), addressedRepoID)
 	if !resolved {
-		return nil
+		return observationVerification{BindingLevel: askBindingLevelRepoID, RemoteCheck: remoteCheck}, nil
 	}
 	if canonicalPathForCompare(payload.AbsoluteGitDir) != canonicalPathForCompare(expectedGitDir) {
-		return fmt.Errorf("answer observed wrong git dir: %s != %s", payload.AbsoluteGitDir, expectedGitDir)
+		return observationVerification{}, fmt.Errorf("answer observed wrong git dir: %s != %s", payload.AbsoluteGitDir, expectedGitDir)
 	}
 	if payload.GitDirDev == 0 || payload.GitDirIno == 0 || expectedDev == 0 || expectedIno == 0 {
-		return nil
+		return observationVerification{BindingLevel: askBindingLevelPath, RemoteCheck: remoteCheck}, nil
 	}
 	if payload.GitDirDev != expectedDev || payload.GitDirIno != expectedIno {
-		return fmt.Errorf(
+		return observationVerification{}, fmt.Errorf(
 			"answer observed wrong git dir inode: %d:%d != %d:%d",
 			payload.GitDirDev,
 			payload.GitDirIno,
@@ -871,7 +911,73 @@ func validateLiveAskRepoStatusObservation(
 		)
 	}
 
-	return nil
+	return observationVerification{BindingLevel: askBindingLevelInode, RemoteCheck: remoteCheck}, nil
+}
+
+// verifyRepoStatusRemote anchors the signed remote against an operator-asserted or
+// locally-derived expectation (WO-123). A mismatch is a distinct observation-context
+// error; an absent expectation is reported as unavailable, never silently matched.
+func verifyRepoStatusRemote(addressedRepoID, expectRemote, signedRemote string) (string, error) {
+	expected := strings.TrimSpace(expectRemote)
+	explicit := expected != ""
+	if !explicit {
+		if origin, err := addressedRepoOrigin(context.Background(), addressedRepoID); err == nil {
+			expected = strings.TrimSpace(origin)
+		}
+	}
+	if expected == "" {
+		return askRemoteCheckUnavailable, nil
+	}
+	if normalizeRemoteURL(expected) == normalizeRemoteURL(signedRemote) {
+		return askRemoteCheckMatch, nil
+	}
+	if explicit {
+		return "", fmt.Errorf("answer observed wrong remote: signed remote %q does not match --expect-remote %q", signedRemote, expected)
+	}
+
+	return "", fmt.Errorf("answer observed wrong remote: signed remote %q does not match addressed repo origin %q", signedRemote, expected)
+}
+
+// addressedRepoOrigin derives the addressed repo's origin URL from a local clone, so a
+// same-machine asker gets a remote anchor without an explicit flag (WO-123). A repo with
+// no origin (or no local clone) returns an error, surfaced upstream as unavailable.
+func addressedRepoOrigin(ctx context.Context, repoPath string) (string, error) {
+	origin, err := runGitCommand(ctx, repoPath, "remote", "get-url", "origin")
+	if err != nil {
+		return "", err
+	}
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return "", errors.New("addressed repo has no origin remote")
+	}
+
+	return origin, nil
+}
+
+// normalizeRemoteURL reduces common git remote URL spellings of the same repo to a shared
+// host/path form for comparison (WO-123). It is deliberately structural only: it equates
+// scheme and suffix variants but never folds case or merges genuinely distinct hosts/orgs.
+func normalizeRemoteURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	// scp-like form: git@host:org/repo -> host/org/repo
+	if !strings.Contains(value, "://") {
+		if at := strings.LastIndex(value, "@"); at >= 0 {
+			value = value[at+1:]
+		}
+		value = strings.Replace(value, ":", "/", 1)
+	} else {
+		value = value[strings.Index(value, "://")+len("://"):]
+		if at := strings.LastIndex(value, "@"); at >= 0 {
+			value = value[at+1:]
+		}
+	}
+	value = strings.TrimRight(value, "/")
+	value = strings.TrimSuffix(value, ".git")
+
+	return strings.TrimRight(value, "/")
 }
 
 func addressedRepoGitIdentity(ctx context.Context, repoPath string) (string, uint64, uint64, bool) {

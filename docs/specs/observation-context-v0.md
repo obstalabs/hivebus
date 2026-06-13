@@ -67,19 +67,20 @@ answer TTL (`answer.go:484`–`485`). The default TTL is **30 seconds** (`defaul
 
 ## The verification algorithm
 
-The asker verifies a returned answer in a fixed order (`internal/cli/ask.go`, in the answer
-validation path beginning at `ask.go:768`):
+The asker verifies a returned answer in a fixed order (`internal/cli/ask.go`,
+`validateLiveAskAnswerForRepo` at `ask.go:796`):
 
 1. **Envelope shape** — type is `answer`, `reply_to` matches the query message ID,
-   `thread_id` matches (`ask.go:770`–`777`).
-2. **Route binding** — the answer comes from the addressed target (`ask.go:778`,
-   `validateLiveAskAnswerRoute`).
+   `thread_id` matches (`ask.go:808`).
+2. **Route binding** — the answer comes from the addressed target
+   (`validateLiveAskAnswerRoute`, `ask.go:813`).
 3. **Signature** — `model.VerifyEnvelope(answer, answerPublicKey)`; failure returns
-   `answer signature verification failed` (`ask.go:781`–`782`).
+   `answer signature verification failed` (`ask.go:816`).
 4. **Deadline** — if the envelope carries a deadline and it has passed, reject
-   (`ask.go:784`–`785`).
-5. **Observation context** — `validateLiveAskRepoStatusObservation` (`ask.go:787`, defined
-   at `ask.go:794`).
+   (`ask.go:819`).
+5. **Observation context** — `validateLiveAskRepoStatusObservation` (`ask.go:823`, defined
+   at `ask.go:826`), which returns the **binding level** that actually verified plus the
+   **remote-fingerprint** outcome.
 
 Steps 3 and 5 are distinct: a bad signature fails at step 3 with a signature error; a
 correctly-signed answer that observed the *wrong world* fails at step 5 with an
@@ -87,26 +88,32 @@ observation error. That distinction is the whole point.
 
 ### Step 5 in detail
 
-For a `repo_status` answer (`ask.go:794`–`875`):
+For a `repo_status` answer (`validateLiveAskRepoStatusObservation`, `ask.go:826`):
 
-- The payload must parse as JSON (`ask.go:817`).
-- `trust_class` must equal `tool_asserted`, else reject (`ask.go:820`). See
+- The payload must parse as JSON (`ask.go:851`).
+- `trust_class` must equal `tool_asserted`, else reject (`ask.go:853`). See
   [Trust classes](#trust-classes).
-- `read_only` must be true (`ask.go:823`).
-- `question_type` must be `repo_status` (`ask.go:826`).
+- `read_only` must be true (`ask.go:856`).
+- `question_type` must be `repo_status` (`ask.go:859`).
 - `repo_id` must be present and **must equal the addressed repo ID** — a mismatch is
-  `answer observed wrong repo` (`ask.go:829`–`834`).
+  `answer observed wrong repo` (`ask.go:862`–`865`).
 - `git_head_sha` must be present and, if `head.full` is set, must equal it
-  (`ask.go:835`–`840`).
-- `absolute_git_dir` must be present (`ask.go:841`–`843`).
+  (`ask.go:868`–`871`).
+- `absolute_git_dir` must be present (`ask.go:874`).
 - `observed_at` and `expires_at` must be present; `now` must not be after `expires_at`,
-  else `repo_status observation is expired` (`ask.go:844`–`852`).
+  else `repo_status observation is expired` (`ask.go:877`–`883`).
+- **Remote-fingerprint anchor** — `verifyRepoStatusRemote` (`ask.go:920`) checks the signed
+  `remote` against an expectation that is either operator-asserted (`--expect-remote`) or
+  derived from a local clone's `origin` (`addressedRepoOrigin`, `ask.go:944`). A mismatch is
+  a distinct `answer observed wrong remote` error; see [Binding levels](#binding-levels).
 - The asker resolves the **addressed** repo's own git identity locally
-  (`addressedRepoGitIdentity`, `ask.go:877`) and compares:
+  (`addressedRepoGitIdentity`, `ask.go:894`) and compares, naming the level it reached:
+  - repo not resolvable locally → level `repo_id_only` (`ask.go:895`–`896`).
   - canonical `absolute_git_dir` must match, else `answer observed wrong git dir`
-    (`ask.go:858`–`860`).
+    (`ask.go:899`).
+  - inode unavailable (zero) but path matched → level `git_dir_path` (`ask.go:902`).
   - `git_dir_dev`/`git_dir_ino` must match, else `answer observed wrong git dir inode`
-    (`ask.go:864`–`872`).
+    (`ask.go:905`); on match → level `git_dir_inode` (`ask.go:914`).
 
 A wrong checkout sharing a plausible path is therefore caught by the device+inode
 comparison even when the path string looks right.
@@ -114,33 +121,38 @@ comparison even when the path string looks right.
 ## Binding levels
 
 Observation context is verifiable to different strengths depending on where the asker and
-answerer sit relative to each other. The level reached **must be named, never silently
-treated as the strongest tier.**
+answerer sit relative to each other. The level reached **is named on every verify, never
+silently treated as the strongest tier** (WO-123). A successful `repo_status` ask reports
+its `binding_level` and `remote_check` in the ask output (`askExchange`, `ask.go:91`–`92`).
 
-| Level | Binding | Status |
-|-------|---------|--------|
-| **Same host** | device + inode of the `.git` directory match (`ask.go:864`) | **Enforced today** |
-| Same host, path only | canonical `absolute_git_dir` matches but inode unavailable | **Enforced today** as a path-equality check (`ask.go:858`) |
-| Container / remote | signed repo ID + remote URL, without same-host inode reach | **Specified, not yet enforced** — see below |
-| Cross-org | signed delegation across trust domains | **Specified, not yet enforced** |
+| Level | `binding_level` | Binding | Status |
+|-------|-----------------|---------|--------|
+| **Same host** | `git_dir_inode` | device + inode of the `.git` directory match (`ask.go:905`, named `ask.go:914`) | **Enforced today** |
+| Same host, path only | `git_dir_path` | canonical `absolute_git_dir` matches, inode unavailable (`ask.go:899`, named `ask.go:902`) | **Enforced today** |
+| Remote / cross-machine | `repo_id_only` + `remote_check` | repo not resolvable locally; `repo_id` string compare anchored by the remote-URL fingerprint (`ask.go:896`, `verifyRepoStatusRemote` `ask.go:920`) | **Enforced today** |
+| Cross-org | — | signed delegation across trust domains | **Specified, not yet enforced** |
 
-### Honest gaps in the current enforcement
+### No silent downgrade
 
-Two best-effort downgrades exist in the code today and are documented here rather than
-hidden:
+Earlier revisions of this spec documented two best-effort downgrades that *passed at a
+weaker level without naming it.* WO-123 closed that: every verify outcome now returns an
+`observationVerification` (`ask.go:102`) carrying the achieved `binding_level`, so a weaker
+result is explicit rather than invisible:
 
-- If the asker cannot resolve the addressed repo's git identity locally
-  (`resolved == false`), step 5 returns success without the directory/inode comparison
-  (`ask.go:854`–`857`). The signature and payload-shape checks still hold; the same-host
-  observation match does not.
-- If either side's device or inode is zero (unavailable), the inode comparison is skipped
-  and the weaker path-equality result stands (`ask.go:861`–`863`).
+- repo not resolvable locally → `binding_level=repo_id_only` (`ask.go:895`–`896`), not a
+  silent success.
+- inode unavailable but path matched → `binding_level=git_dir_path` (`ask.go:902`).
 
-In both cases the verification currently *passes at a weaker level without emitting the
-level name to the caller.* Naming the achieved level on every verify, and rejecting a
-remote mismatch on the remote tier, is tracked by **WO-123** (open) and is the reason the
-container/remote rows above are marked *specified, not yet enforced*. This document will be
-revised to move those rows to *enforced* when WO-123 lands.
+The remote tier is now anchored, not string-only: `verifyRepoStatusRemote` (`ask.go:920`)
+compares the signed `remote` against an operator-asserted `--expect-remote` or a
+locally-derived clone `origin`. A mismatch is rejected distinctly (`answer observed wrong
+remote`, `ask.go:935`/`938`); an absent expectation is reported as `remote_check=unavailable`
+(`ask.go:929`), never silently treated as a match. URL comparison is structural-only
+normalization (`normalizeRemoteURL`, `ask.go:960`): scheme and `.git`-suffix variants of the
+same repo are equated, but distinct hosts, orgs, and case are not.
+
+The remaining *specified, not yet enforced* row is cross-org signed delegation across trust
+domains; this document will be revised when that lands.
 
 ## Trust classes
 
@@ -149,7 +161,7 @@ launders into an inference:
 
 - `tool_asserted` — the value was read by a tool (here, git on disk). This is the only
   class a `repo_status` answer may carry; the answerer sets it at `answer.go:642` and the
-  verifier rejects anything else at `ask.go:820`.
+  verifier rejects anything else at `ask.go:853`.
 - `model_inferred` — **specified, not emitted.** It is the reserved counterpart for answers
   that are a model's judgment rather than a tool reading. No resolver in `internal/cli`
   emits it today, and the repo_status verifier would reject it. It is documented here so the
@@ -176,8 +188,8 @@ after signing without invalidating the signature.
 ## Surface scope: CLI vs runtime
 
 This specification describes the `ask`/`answer` CLI protocol surface (`internal/cli`),
-where envelope signatures **are** cryptographically verified (`ask.go:463` for queries,
-`ask.go:781` for answers).
+where envelope signatures **are** cryptographically verified (`ask.go:489` for queries,
+`ask.go:816` for answers).
 
 The repository's README "Known Limitations" note that "envelope signatures are represented
 structurally but not cryptographically verified yet" refers to the **runtime HTTP intake
@@ -191,5 +203,5 @@ CLI path.
 - Boundary charter: [docs/BOUNDARY.md](../BOUNDARY.md) — the dumb-channel core boundary.
 - Binding implementation: `internal/cli/answer.go`, `internal/cli/ask.go`.
 - Signing: `internal/model/envelope_signing.go`.
-- Binding-level transparency and remote mismatch rejection: WO-123 (open).
+- Binding-level transparency and remote-fingerprint binding: WO-123.
 - Origin of the observation-context fields: WO-119.

@@ -1309,7 +1309,7 @@ func TestValidateLiveAskAnswerBindsRepoStatusObservationContext(t *testing.T) {
 	observedAt := fixedAskTime().Add(askAnswerDelay)
 
 	wrongRepoAnswer := signedRepoStatusAnswerFromRepo(t, query, repoA, answerPrivateKey, observedAt, nil)
-	err := validateLiveAskAnswerForRepo(query, wrongRepoAnswer, answerPublicKey, observedAt.Add(time.Second), repoB)
+	_, err := validateLiveAskAnswerForRepo(query, wrongRepoAnswer, answerPublicKey, observedAt.Add(time.Second), repoB, "")
 	if err == nil {
 		t.Fatal("validateLiveAskAnswerForRepo() expected wrong-repo rejection")
 	}
@@ -1321,8 +1321,12 @@ func TestValidateLiveAskAnswerBindsRepoStatusObservationContext(t *testing.T) {
 	}
 
 	correctAnswer := signedRepoStatusAnswerFromRepo(t, query, repoB, answerPrivateKey, observedAt, nil)
-	if err := validateLiveAskAnswerForRepo(query, correctAnswer, answerPublicKey, observedAt.Add(time.Second), repoB); err != nil {
+	verification, err := validateLiveAskAnswerForRepo(query, correctAnswer, answerPublicKey, observedAt.Add(time.Second), repoB, "")
+	if err != nil {
 		t.Fatalf("validateLiveAskAnswerForRepo() correct same-repo error = %v", err)
+	}
+	if verification.BindingLevel != askBindingLevelInode {
+		t.Fatalf("validateLiveAskAnswerForRepo() binding_level = %q, want %q", verification.BindingLevel, askBindingLevelInode)
 	}
 }
 
@@ -1347,7 +1351,7 @@ func TestValidateLiveAskAnswerRejectsRepoStatusGitDirDrift(t *testing.T) {
 		payload.RepoID = repoBID
 		payload.CanonicalRepoPath = repoBID
 	})
-	err = validateLiveAskAnswerForRepo(query, driftedAnswer, answerPublicKey, observedAt.Add(time.Second), repoB)
+	_, err = validateLiveAskAnswerForRepo(query, driftedAnswer, answerPublicKey, observedAt.Add(time.Second), repoB, "")
 	if err == nil {
 		t.Fatal("validateLiveAskAnswerForRepo() expected git-dir drift rejection")
 	}
@@ -1371,7 +1375,7 @@ func TestValidateLiveAskAnswerRejectsStaleRepoStatusObservation(t *testing.T) {
 	observedAt := fixedAskTime().Add(-time.Minute)
 
 	answer := signedRepoStatusAnswerFromRepo(t, query, repoPath, answerPrivateKey, observedAt, nil)
-	err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, fixedAskTime(), repoPath)
+	_, err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, fixedAskTime(), repoPath, "")
 	if err == nil {
 		t.Fatal("validateLiveAskAnswerForRepo() expected stale observation rejection")
 	}
@@ -1417,8 +1421,145 @@ func TestValidateLiveAskAnswerFallsBackToRepoIDWhenGitDirIsUnavailable(t *testin
 	}
 
 	answer := signLiveAskAnswer(t, query, payloadBytes, answerPrivateKey)
-	if err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, observedAt.Add(time.Second), repoPath); err != nil {
+	verification, err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, observedAt.Add(time.Second), repoPath, "")
+	if err != nil {
 		t.Fatalf("validateLiveAskAnswerForRepo() fallback error = %v", err)
+	}
+	if verification.BindingLevel != askBindingLevelRepoID {
+		t.Fatalf("validateLiveAskAnswerForRepo() binding_level = %q, want %q", verification.BindingLevel, askBindingLevelRepoID)
+	}
+	if verification.RemoteCheck != askRemoteCheckUnavailable {
+		t.Fatalf("validateLiveAskAnswerForRepo() remote_check = %q, want %q", verification.RemoteCheck, askRemoteCheckUnavailable)
+	}
+}
+
+func TestValidateLiveAskAnswerExpectRemoteMatchAndMismatch(t *testing.T) {
+	// WO-123: an operator-asserted remote anchors a cross-machine ask; a mismatch is a
+	// distinct observation-context error, a match passes and is named.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	withDeterministicAskRuntime(t)
+
+	repoPath := initAskRepoStatusGitRepo(t, "repo")
+	runGitTestCommand(t, repoPath, "remote", "add", "origin", "git@github.com:obstalabs/hivebus.git")
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(40)
+	query := signedRepoStatusAskQuery(t, repoPath)
+	observedAt := fixedAskTime().Add(askAnswerDelay)
+	answer := signedRepoStatusAnswerFromRepo(t, query, repoPath, answerPrivateKey, observedAt, nil)
+
+	// Explicit --expect-remote that matches the signed remote (scheme variant) passes.
+	verification, err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, observedAt.Add(time.Second), repoPath, "https://github.com/obstalabs/hivebus")
+	if err != nil {
+		t.Fatalf("validateLiveAskAnswerForRepo() expect-remote match error = %v", err)
+	}
+	if verification.RemoteCheck != askRemoteCheckMatch {
+		t.Fatalf("validateLiveAskAnswerForRepo() remote_check = %q, want %q", verification.RemoteCheck, askRemoteCheckMatch)
+	}
+
+	// Explicit --expect-remote that does not match is rejected distinctly.
+	_, err = validateLiveAskAnswerForRepo(query, answer, answerPublicKey, observedAt.Add(time.Second), repoPath, "https://github.com/someoneelse/hivebus")
+	if err == nil {
+		t.Fatal("validateLiveAskAnswerForRepo() expected wrong-remote rejection")
+	}
+	if !strings.Contains(err.Error(), "answer observed wrong remote") || !strings.Contains(err.Error(), "--expect-remote") {
+		t.Fatalf("validateLiveAskAnswerForRepo() error = %q, want explicit wrong remote", err)
+	}
+	if strings.Contains(err.Error(), "signature verification") {
+		t.Fatalf("validateLiveAskAnswerForRepo() error = %q, want provenance failure", err)
+	}
+}
+
+func TestValidateLiveAskAnswerAutoDerivedRemoteMismatchRejected(t *testing.T) {
+	// WO-123: when the asker has a local clone, the origin URL anchors the remote without
+	// a flag; a signed remote naming a different repo is rejected, not silently accepted.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	withDeterministicAskRuntime(t)
+
+	repoPath := initAskRepoStatusGitRepo(t, "repo")
+	runGitTestCommand(t, repoPath, "remote", "add", "origin", "git@github.com:obstalabs/hivebus.git")
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(41)
+	query := signedRepoStatusAskQuery(t, repoPath)
+	observedAt := fixedAskTime().Add(askAnswerDelay)
+
+	// The signed card reports a different remote than the addressed clone's origin.
+	answer := signedRepoStatusAnswerFromRepo(t, query, repoPath, answerPrivateKey, observedAt, func(payload *repoStatusAnswerPayload) {
+		payload.Remote = "git@github.com:someoneelse/hivebus.git"
+	})
+	_, err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, observedAt.Add(time.Second), repoPath, "")
+	if err == nil {
+		t.Fatal("validateLiveAskAnswerForRepo() expected auto-derived wrong-remote rejection")
+	}
+	if !strings.Contains(err.Error(), "answer observed wrong remote") || !strings.Contains(err.Error(), "origin") {
+		t.Fatalf("validateLiveAskAnswerForRepo() error = %q, want auto-derived wrong remote", err)
+	}
+
+	// The matching origin passes and the strong inode level is still named.
+	matchAnswer := signedRepoStatusAnswerFromRepo(t, query, repoPath, answerPrivateKey, observedAt, nil)
+	verification, err := validateLiveAskAnswerForRepo(query, matchAnswer, answerPublicKey, observedAt.Add(time.Second), repoPath, "")
+	if err != nil {
+		t.Fatalf("validateLiveAskAnswerForRepo() auto-derived match error = %v", err)
+	}
+	if verification.RemoteCheck != askRemoteCheckMatch {
+		t.Fatalf("validateLiveAskAnswerForRepo() remote_check = %q, want %q", verification.RemoteCheck, askRemoteCheckMatch)
+	}
+	if verification.BindingLevel != askBindingLevelInode {
+		t.Fatalf("validateLiveAskAnswerForRepo() binding_level = %q, want %q", verification.BindingLevel, askBindingLevelInode)
+	}
+}
+
+func TestNormalizeRemoteURLEquivalence(t *testing.T) {
+	// WO-123: structural-only normalization equates scheme/suffix variants of the same
+	// repo without folding genuinely distinct hosts, orgs, or case.
+	equal := [][2]string{
+		{"git@github.com:obstalabs/hivebus.git", "https://github.com/obstalabs/hivebus"},
+		{"https://github.com/obstalabs/hivebus.git", "https://github.com/obstalabs/hivebus/"},
+		{"ssh://git@github.com/obstalabs/hivebus.git", "git@github.com:obstalabs/hivebus"},
+	}
+	for _, pair := range equal {
+		if normalizeRemoteURL(pair[0]) != normalizeRemoteURL(pair[1]) {
+			t.Fatalf("normalizeRemoteURL(%q)=%q != normalizeRemoteURL(%q)=%q", pair[0], normalizeRemoteURL(pair[0]), pair[1], normalizeRemoteURL(pair[1]))
+		}
+	}
+
+	distinct := [][2]string{
+		{"git@github.com:obstalabs/hivebus.git", "git@github.com:someoneelse/hivebus.git"},
+		{"git@github.com:obstalabs/hivebus.git", "git@gitlab.com:obstalabs/hivebus.git"},
+		{"git@github.com:obstalabs/Hivebus.git", "git@github.com:obstalabs/hivebus.git"},
+	}
+	for _, pair := range distinct {
+		if normalizeRemoteURL(pair[0]) == normalizeRemoteURL(pair[1]) {
+			t.Fatalf("normalizeRemoteURL collapsed distinct remotes: %q == %q (both %q)", pair[0], pair[1], normalizeRemoteURL(pair[0]))
+		}
+	}
+}
+
+func TestValidateLiveAskAnswerNamesPathLevelWhenInodeUnavailable(t *testing.T) {
+	// WO-123: when the git dir path matches but inode data is unavailable, verification
+	// passes at the named git_dir_path level rather than silently as the strongest tier.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	withDeterministicAskRuntime(t)
+
+	repoPath := initAskRepoStatusGitRepo(t, "repo")
+	answerPublicKey, answerPrivateKey := deterministicAskSigningKey(42)
+	query := signedRepoStatusAskQuery(t, repoPath)
+	observedAt := fixedAskTime().Add(askAnswerDelay)
+
+	// Zero the signed inode fingerprint: the path still matches, inode comparison is skipped.
+	answer := signedRepoStatusAnswerFromRepo(t, query, repoPath, answerPrivateKey, observedAt, func(payload *repoStatusAnswerPayload) {
+		payload.GitDirDev = 0
+		payload.GitDirIno = 0
+	})
+	verification, err := validateLiveAskAnswerForRepo(query, answer, answerPublicKey, observedAt.Add(time.Second), repoPath, "")
+	if err != nil {
+		t.Fatalf("validateLiveAskAnswerForRepo() path-level error = %v", err)
+	}
+	if verification.BindingLevel != askBindingLevelPath {
+		t.Fatalf("validateLiveAskAnswerForRepo() binding_level = %q, want %q", verification.BindingLevel, askBindingLevelPath)
 	}
 }
 
