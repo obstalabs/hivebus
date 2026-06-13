@@ -4,7 +4,7 @@
 
 # hivebus
 
-Secure threaded coordination fabric for agent-native issue intake, investigation, and workledger-first work-order creation.
+A signed channel for agent-to-agent questions that binds the world the answerer observed, not just who spoke. Open source (MIT). The same dumb-but-honest bus also carries agent-native issue intake, investigation, and promotion-ready work-order creation.
 
 ## What This Is
 
