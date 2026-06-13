@@ -1,8 +1,8 @@
 package policy
 
 import (
-	"github.com/ppiankov/hivebus/internal/licensing"
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/licensing"
+	"github.com/obstalabs/hivebus/internal/model"
 )
 
 // EditionBoundary keeps pricing boundaries structural instead of aspirational.

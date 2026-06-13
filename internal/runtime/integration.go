@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/work"
+	"github.com/obstalabs/hivebus/internal/work"
 )
 
 type HandlerOptions struct {

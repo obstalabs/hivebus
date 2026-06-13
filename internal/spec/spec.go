@@ -1,8 +1,8 @@
 package spec
 
 import (
-	"github.com/ppiankov/hivebus/internal/model"
-	"github.com/ppiankov/hivebus/internal/policy"
+	"github.com/obstalabs/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/policy"
 )
 
 // Document is the compact machine contract for the v0 protocol.

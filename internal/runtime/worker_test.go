@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/model"
 )
 
 func TestWorkerPollAndClaimOverHTTP(t *testing.T) {

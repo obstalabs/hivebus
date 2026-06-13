@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	artifactstore "github.com/ppiankov/hivebus/internal/artifact"
-	"github.com/ppiankov/hivebus/internal/model"
-	"github.com/ppiankov/hivebus/internal/store"
+	artifactstore "github.com/obstalabs/hivebus/internal/artifact"
+	"github.com/obstalabs/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/store"
 )
 
 type putArtifactRequest struct {

@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/model"
-	"github.com/ppiankov/hivebus/internal/store"
+	"github.com/obstalabs/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/store"
 )
 
 const defaultLeaseDuration = 5 * time.Minute

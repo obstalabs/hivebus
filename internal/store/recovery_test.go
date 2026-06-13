@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/model"
 )
 
 var errSinglePassedPromotionFixture = errors.New("single promotion-passed recovery fixture must use pair finalization")

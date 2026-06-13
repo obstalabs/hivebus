@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ppiankov/hivebus/internal/cli"
+	"github.com/obstalabs/hivebus/internal/cli"
 )
 
 func main() {

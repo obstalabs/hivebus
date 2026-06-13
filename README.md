@@ -1,4 +1,4 @@
-[![CI](https://github.com/ppiankov/hivebus/actions/workflows/ci.yml/badge.svg)](https://github.com/ppiankov/hivebus/actions/workflows/ci.yml)
+[![CI](https://github.com/obstalabs/hivebus/actions/workflows/ci.yml/badge.svg)](https://github.com/obstalabs/hivebus/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8.svg)](https://go.dev)
 

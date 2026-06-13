@@ -1,4 +1,4 @@
-module github.com/ppiankov/hivebus
+module github.com/obstalabs/hivebus
 
 go 1.26.0
 

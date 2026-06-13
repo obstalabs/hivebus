@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/model"
 )
 
 const sampleAgentAnswerPublicKey = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="

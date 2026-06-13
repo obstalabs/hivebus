@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/model"
 )
 
 type Store struct {

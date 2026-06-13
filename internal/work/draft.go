@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/model"
 )
 
 // Draft is the workledger-tracked unit created only after a verified diagnosis.

@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ppiankov/hivebus/internal/store"
+	"github.com/obstalabs/hivebus/internal/store"
 	"github.com/spf13/cobra"
 )
 

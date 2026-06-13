@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/model"
 	_ "modernc.org/sqlite"
 )
 

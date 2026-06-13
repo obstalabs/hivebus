@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/model"
-	"github.com/ppiankov/hivebus/internal/spec"
+	"github.com/obstalabs/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/spec"
 )
 
 func TestStoreAppendAndReplayThread(t *testing.T) {

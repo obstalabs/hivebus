@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/model"
-	"github.com/ppiankov/hivebus/internal/work"
+	"github.com/obstalabs/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/work"
 )
 
 type fakeWorkOrderBridge struct {

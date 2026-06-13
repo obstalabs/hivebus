@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/runtime"
+	"github.com/obstalabs/hivebus/internal/runtime"
 )
 
 func TestLoadKeyStoreAllowsExplicitAuthDisabled(t *testing.T) {

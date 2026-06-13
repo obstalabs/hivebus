@@ -3,7 +3,7 @@ package store
 import (
 	"errors"
 
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/model"
 )
 
 // WO-64: direct append surfaces must not mint legacy or promotion-passed truth.

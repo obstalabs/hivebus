@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/ppiankov/hivebus/internal/store"
+	"github.com/obstalabs/hivebus/internal/store"
 )
 
 func (s *server) handleThreadRecovery(w http.ResponseWriter, r *http.Request) {

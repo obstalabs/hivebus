@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/ppiankov/hivebus/internal/spec"
+	"github.com/obstalabs/hivebus/internal/spec"
 	"github.com/spf13/cobra"
 )
 

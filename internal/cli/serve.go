@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/artifact"
-	"github.com/ppiankov/hivebus/internal/runtime"
-	"github.com/ppiankov/hivebus/internal/store"
+	"github.com/obstalabs/hivebus/internal/artifact"
+	"github.com/obstalabs/hivebus/internal/runtime"
+	"github.com/obstalabs/hivebus/internal/store"
 	"github.com/spf13/cobra"
 )
 

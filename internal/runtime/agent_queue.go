@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/model"
-	"github.com/ppiankov/hivebus/internal/store"
+	"github.com/obstalabs/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/store"
 )
 
 const defaultAgentMessageTTL = time.Hour

@@ -4,8 +4,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ppiankov/hivebus/internal/licensing"
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/licensing"
+	"github.com/obstalabs/hivebus/internal/model"
 )
 
 func TestBoundarySplitsFreeAndCommercialRepos(t *testing.T) {

@@ -3,7 +3,7 @@ package policy
 import (
 	"fmt"
 
-	"github.com/ppiankov/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/model"
 )
 
 const mib = 1024 * 1024

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ppiankov/hivebus/internal/model"
-	"github.com/ppiankov/hivebus/internal/work"
+	"github.com/obstalabs/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/work"
 )
 
 // CaseBundle demonstrates the intended nullbot -> agents -> workledger flow.

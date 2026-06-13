@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ppiankov/hivebus/internal/store"
+	"github.com/obstalabs/hivebus/internal/store"
 )
 
 func TestRunWatchPrintsStructuredJSONLines(t *testing.T) {

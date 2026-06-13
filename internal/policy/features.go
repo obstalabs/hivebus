@@ -1,6 +1,6 @@
 package policy
 
-import "github.com/ppiankov/hivebus/internal/model"
+import "github.com/obstalabs/hivebus/internal/model"
 
 // FeatureDescriptor defines which repo owns a capability and which tiers receive it.
 type FeatureDescriptor struct {

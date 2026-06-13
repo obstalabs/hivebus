@@ -9,9 +9,9 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X github.com/ppiankov/hivebus/internal/cli.Version={{ trimPrefix .Version "v" }}
-      - -X github.com/ppiankov/hivebus/internal/cli.Commit={{ .ShortCommit }}
-      - -X github.com/ppiankov/hivebus/internal/cli.BuildDate={{ .CommitDate }}
+      - -X github.com/obstalabs/hivebus/internal/cli.Version={{ trimPrefix .Version "v" }}
+      - -X github.com/obstalabs/hivebus/internal/cli.Commit={{ .ShortCommit }}
+      - -X github.com/obstalabs/hivebus/internal/cli.BuildDate={{ .CommitDate }}
     goos:
       - linux
       - darwin
@@ -37,11 +37,11 @@ changelog:
 
 brews:
   - repository:
-      owner: ppiankov
+      owner: obstalabs
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    homepage: "https://github.com/ppiankov/hivebus"
+    homepage: "https://github.com/obstalabs/hivebus"
     description: "Secure threaded coordination bus for agents"
     license: MIT
     install: |
