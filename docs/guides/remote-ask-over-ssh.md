@@ -107,6 +107,14 @@ worker it opens this same `-R` forward as part of dispatch; here we open it by h
 
 The remote worker is the warm answerer for its own checkout; the operator asks it.
 
+> **Address the remote repo by its REMOTE absolute path.** The answerer signs the
+> `repo_id` it observes — the repo's **canonical path on the remote** (e.g.
+> `/home/worker/checkout-api`). The operator's `--repo` must be that same remote path,
+> passed literally. Do **not** use a `~/…` or operator-local path: `ask` canonicalizes
+> `--repo` against the operator's filesystem, so a local-looking path addresses the wrong
+> repo and the answer is rejected with `answer observed wrong repo: <remote> != <local>`.
+> The operator does not need a local clone — it only needs to name the remote path.
+
 ### fish
 
 ```fish
@@ -114,13 +122,14 @@ The remote worker is the warm answerer for its own checkout; the operator asks i
 env -u WORKLEDGER_API_KEY hivebus answer --server http://127.0.0.1:7097 --insecure \
     --agent worker/remote --session-id remote-1 \
     --signing-key (cat ~/.hivebus/wl.seed) \
-    --repo ~/dev/obstalabs-github/hivebus --project hivebus
+    --repo /home/worker/checkout-api --project checkout-api
 
 # --- operator: ask the remote for its signed repo_status ---
+# --repo is the REMOTE path the answerer signed, passed literally:
 echo "what repo status did you observe?" | hivebus ask \
     --server http://127.0.0.1:7097 --insecure \
     --to worker/remote --from architect/operator --type repo_status \
-    --repo ~/dev/obstalabs-github/hivebus \
+    --repo /home/worker/checkout-api \
     --session-id operator-asker-1 --timeout 6s
 ```
 
@@ -131,57 +140,61 @@ echo "what repo status did you observe?" | hivebus ask \
 env -u WORKLEDGER_API_KEY hivebus answer --server http://127.0.0.1:7097 --insecure \
     --agent worker/remote --session-id remote-1 \
     --signing-key "$(cat ~/.hivebus/wl.seed)" \
-    --repo ~/dev/obstalabs-github/hivebus --project hivebus
+    --repo /home/worker/checkout-api --project checkout-api
 
-# --- operator: ask ---
+# --- operator: ask (--repo = the REMOTE path, literal, not ~/…) ---
 echo "what repo status did you observe?" | hivebus ask \
     --server http://127.0.0.1:7097 --insecure \
     --to worker/remote --from architect/operator --type repo_status \
-    --repo ~/dev/obstalabs-github/hivebus \
+    --repo /home/worker/checkout-api \
     --session-id operator-asker-1 --timeout 6s
 ```
 
 ### sh / zsh / POSIX
 
 ```sh
-# --- remote (worker-vm) ---
+# --- remote (worker-vm): use the repo's absolute path on the remote ---
 env -u WORKLEDGER_API_KEY hivebus answer --server http://127.0.0.1:7097 --insecure \
     --agent worker/remote --session-id remote-1 \
     --signing-key "$(cat "$HOME/.hivebus/wl.seed")" \
-    --repo "$HOME/dev/obstalabs-github/hivebus" --project hivebus
+    --repo /home/worker/checkout-api --project checkout-api
 
-# --- operator ---
+# --- operator: --repo is that same REMOTE absolute path, literal ---
 echo "what repo status did you observe?" | hivebus ask \
     --server http://127.0.0.1:7097 --insecure \
     --to worker/remote --from architect/operator --type repo_status \
-    --repo "$HOME/dev/obstalabs-github/hivebus" \
+    --repo /home/worker/checkout-api \
     --session-id operator-asker-1 --timeout 6s
 ```
 
-The operator passes `--repo` to name the addressed repository. Because the operator has no
-local clone of the remote checkout, verification lands at `binding_level: repo_id_only` — the
-honest remote tier. `--type repo_status` is the only resolver class today.
+The operator passes `--repo` to name the addressed repository — the remote's own absolute
+path (see the callout above). Because the operator has no local clone of that checkout,
+verification lands at `binding_level: repo_id_only` — the honest remote tier. `--type
+repo_status` is the only resolver class today.
 
 ---
 
 ## Direction B — the remote asks the operator (operator answers, remote asks)
 
 Mirror image: the operator runs the warm answerer; the remote consults it over the tunnel.
+The same path rule applies, mirrored: the remote addresses `--repo` by the **operator's**
+absolute path (what the operator answerer signs), passed literally — not a `~/…` that would
+expand against the remote's own `$HOME`.
 
 ### bash (fish/sh differ only in `(cat …)` vs `"$(cat …)"`, as above)
 
 ```bash
-# --- operator: the warm answerer ---
+# --- operator: the warm answerer (its own repo, operator-local path) ---
 env -u WORKLEDGER_API_KEY hivebus answer --server http://127.0.0.1:7097 --insecure \
     --agent architect/operator --session-id operator-1 \
     --signing-key "$(cat ~/.hivebus/wl.seed)" \
-    --repo ~/dev/obstalabs-github/hivebus --project hivebus
+    --repo /Users/operator/checkout-api --project checkout-api
 
-# --- remote (worker-vm): ask the operator-side agent over the tunnel ---
+# --- remote (worker-vm): --repo is the OPERATOR's absolute path, literal ---
 echo "what repo status did you observe?" | hivebus ask \
     --server http://127.0.0.1:7097 --insecure \
     --to architect/operator --from worker/remote --type repo_status \
-    --repo ~/dev/obstalabs-github/hivebus \
+    --repo /Users/operator/checkout-api \
     --session-id remote-asker-1 --timeout 6s
 ```
 
@@ -245,8 +258,27 @@ and pin it explicitly with `--answer-public-key-file`.
 
 ## Verified transcript
 
-> Acceptance evidence: a real operator↔remote run over `ssh -R`, both directions, pasted here.
-> _(Pending the reference-VM run; the commands above are verified against the current CLI on a
-> single host. The remote-tier `binding_level: repo_id_only` only appears when the asker has no
-> local clone of the addressed repo — i.e. on a genuine second machine — which is why this
-> evidence block requires the VM run rather than a same-host simulation.)_
+Real two-machine run over an `ssh -R` reverse tunnel. Operator = macOS (arm64); remote =
+a Linux VM (Debian 13, `aarch64`, kernel 6.12) running the worker under a fresh git repo at
+`/home/<worker>/demo-repo` (HEAD `282d35c`). serve bound `127.0.0.1:7197` on the operator;
+`ssh -R 127.0.0.1:7197:127.0.0.1:7197` made it the remote's `localhost`. Both directions
+verified, both landing at the honest remote tier:
+
+```text
+# Direction A — operator (mac) asks, remote (VM) answers:
+#   --repo /home/<worker>/demo-repo   (the REMOTE absolute path the answerer signed)
+delivered: true   answers: 1   response_status: answered   binding_level: repo_id_only
+  signed repo_id: /home/<worker>/demo-repo
+
+# Direction B — remote (VM) asks, operator (mac) answers:
+delivered: true   answers: 1   response_status: answered   binding_level: repo_id_only
+```
+
+Both verify at `repo_id_only` because neither end can stat the other's `.git` inode across
+the network — the cross-machine tier, named not inflated. The first attempt in Direction A
+addressed the repo by an operator-local path and was correctly rejected
+(`answer observed wrong repo: /home/<worker>/demo-repo != /Users/<operator>/demo-repo`),
+which is why the runbook addresses the repo by its **remote** absolute path. A tunnel taken
+down produces a transport error and a non-zero exit
+(`register live ask session: … dial tcp …: connect: connection refused`), distinct from
+`no_answer`.
