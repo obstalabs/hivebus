@@ -171,6 +171,39 @@ live-session integration, which lives out of tree under the
 live working sessions is the commercial layer ([NeuroRouter](https://neurorouter.dev) /
 [Obsta Labs](https://obstalabs.dev)).
 
+Cross-machine: a dispatched agent reports back. The most demanding case is the one where
+the agent **cannot read local state and must ask over the channel** -- a dispatcher on one
+machine sends an agent to a remote server, and that remote agent reports back over hivebus:
+its task acknowledgement, status, and a signed result attestation. There is no shared
+filesystem, so the answer is the only source of truth, and the binding-level matrix earns
+its keep:
+
+```text
+dispatcher (operator machine)        remote agent (server)
+  -> serve binds 127.0.0.1               -> runs under the dispatcher's gate
+  -> ssh -R makes the bus reachable      -> answers/asks at localhost over the tunnel
+     at the remote's localhost
+
+remote agent
+  -> signs its repo_status (or status/ack/result) over what it observes on the server
+
+dispatcher verification
+  -> checks the signature, then the observation context -- but it cannot stat the remote
+     .git inode across the network, so it verifies at the REMOTE tier: the signed repo id
+     and remote URL, reported as `binding_level: repo_id_only`, named not silently upgraded
+```
+
+SSH is the only wire (it already carries the dispatch); hivebus adds no transport security
+of its own -- SSH is the transport, the ed25519 signature is the authenticity. The
+[remote-ask-over-ssh runbook](docs/guides/remote-ask-over-ssh.md) documents this loop with a
+verified two-machine transcript, and [Bulwark](https://obstalabs.dev/bulwark) places the key
+material at dispatch so the first contact is pinnable rather than blind.
+
+Open core covers the deterministic half -- signed status, task acknowledgement, and result
+attestation over the bus, verified at the honest remote tier. The richer form, where the
+remote agent answers from its **live warm context** rather than a disk read, is the
+live-session bridge funnel, out of tree under the boundary charter.
+
 Issue intake to tracked work (the coordination surface):
 
 ```text
