@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-17
+
+### Added
+
+- Prebuilt binaries for macOS and Linux (amd64/arm64) published on each tagged release, plus a Homebrew formula in `obstalabs/homebrew-tap`. Install without a Go toolchain.
+
 ## [0.3.1] - 2026-06-17
 
 ### Fixed
