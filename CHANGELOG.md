@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-17
+
 ### Added
 
 - `hivebus ask` read-only query/answer primitive for signed direct agent questions.
@@ -11,12 +13,19 @@
 - `hivebus answer` conservative repo_status answerer loop for local signed ask/answer round trips.
 - Answerer key discovery with ask-side `known_answerers` pinning for live ask verification.
 - Signed repo_status observation context with repo ID, absolute git dir, and git-dir inode binding.
+- Named observation binding levels (`git_dir_inode` / `git_dir_path` / `repo_id_only`) reported on every verify — no silent downgrade — plus `--expect-remote` and local-clone-derived remote-fingerprint binding for cross-machine asks.
+- `docs/specs/observation-context-v0.md`: the dated, code-true specification of the observation-context binding and verification algorithm.
+- `docs/guides/remote-ask-over-ssh.md`: runbook for running the ask/answer loop across two machines over an SSH reverse tunnel, with a verified transcript.
+- README documents the cross-machine dispatch → remote-agent report-back flow, verified at the remote binding tier.
+- `SECURITY.md`: disclosure policy and the honest envelope-signature verification state.
 - Orthogonal envelope routing fields for visibility, scope, reply policy, redirects, and collection.
 - Signed envelope schema primitives for query, answer, request, and authority directive messages.
 - Typed NeuroRouter agent-run lifecycle envelopes (`nr.run.*`) — hivebus as receipts substrate for governed runs.
 
 ### Changed
 
+- Quick Start rewritten as the "ride a second agent" loop: `go install`, then serve/answer/ask across terminals — no environment-variable ceremony.
+- README explains the wider product stack (`workledger` is the CLI for [Hiveram](https://hiveram.com); NeuroRouter is the live-session bridge) so the open-core-vs-paid line is explicit.
 - `hivebus ask --server` now exits 0 for delivered queries with no trusted answer and reports `delivered=true`, `answers=0`; delivery failures still exit non-zero.
 - `hivebus ask --server` now prefers a later valid signed answer over an earlier unverified candidate in the same inbox batch.
 - `hivebus answer --print-public-key` now requires `--signing-key` instead of printing a throwaway random key.
