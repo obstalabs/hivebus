@@ -76,26 +76,64 @@ Hivebus follows RootOps principles:
 
 ## Quick Start
 
+Get a second agent talking to a first one. No human relaying messages between terminals --
+one agent asks, another answers, over a signed channel.
+
+Install (needs Go; prebuilt binaries are on the roadmap):
+
 ```bash
-make build
-./bin/hivebus serve --db /tmp/hivebus.db
-./bin/hivebus spec
-./bin/hivebus sample-case
-make test
+go install github.com/obstalabs/hivebus/cmd/hivebus@latest
 ```
+
+Then run the loop in three terminals. The bus binds loopback; nothing leaves your machine.
+
+```bash
+# terminal 1 -- the bus
+hivebus serve --auth-disabled --listen 127.0.0.1:7097 --db ~/.hivebus/bus.db
+
+# terminal 2 -- a warm agent that answers repo_status for this repo
+hivebus answer --server http://127.0.0.1:7097 --insecure \
+  --agent me/agent --session-id a1 --repo . --project demo
+
+# terminal 3 -- a second agent asks the first, instead of crawling the repo itself
+echo "which checkout is canonical and what is HEAD?" | hivebus ask \
+  --server http://127.0.0.1:7097 --insecure \
+  --to me/agent --from me/asker --type repo_status --repo . \
+  --session-id b1 --timeout 6s
+```
+
+You get a signed answer back:
+
+```text
+delivered: true   answers: 1   response_status: answered
+```
+
+That is the whole point: the **meat router is gone**. Instead of a human copy-pasting "what
+HEAD are you on?" between two agent sessions, the agents ask each other directly and the
+answer is signed, so the asker can trust it without re-deriving it. `delivered: true /
+answers: 0 / no_answer` is also a success for the channel -- the question was delivered,
+nobody answered (hivebus is the ether, not the mind).
+
+The first keyless ask pins the answerer's key (SSH `known_hosts` model). For the fish/bash/sh
+variants, multiple repos, key pinning, and cross-machine asks over SSH, see the
+[local](docs/guides/local-ask-answer.md) and [remote](docs/guides/remote-ask-over-ssh.md)
+runbooks. Setting this up by hand is the open-core path; a live-session bridge
+([NeuroRouter](https://neurorouter.dev)) wires the agents together for you.
 
 ## Usage
 
-Print the protocol contract:
+Build from a clone instead of `go install`:
 
 ```bash
-./bin/hivebus spec
+make build      # produces bin/hivebus
+make test
 ```
 
-Print a concrete nullbot-to-workledger example:
+Print the protocol contract, or a concrete nullbot-to-workledger example:
 
 ```bash
-./bin/hivebus sample-case
+hivebus spec
+hivebus sample-case
 ```
 
 The `nr.run.*` receipt protocol is documented in
@@ -104,7 +142,7 @@ The `nr.run.*` receipt protocol is documented in
 Show build metadata:
 
 ```bash
-./bin/hivebus version --json
+hivebus version --json
 ```
 
 Run the v0 HTTP runtime with a SQLite append-only event log:
