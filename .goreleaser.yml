@@ -9,7 +9,7 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X github.com/obstalabs/hivebus/internal/cli.Version={{ trimPrefix .Version "v" }}
+      - -X github.com/obstalabs/hivebus/internal/cli.Version={{ .Version }}
       - -X github.com/obstalabs/hivebus/internal/cli.Commit={{ .ShortCommit }}
       - -X github.com/obstalabs/hivebus/internal/cli.BuildDate={{ .CommitDate }}
     goos:
@@ -20,7 +20,7 @@ builds:
       - arm64
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 
