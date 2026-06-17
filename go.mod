@@ -21,3 +21,11 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	modernc.org/sqlite v1.48.0
 )
+
+// These tags predate the module path migration to github.com/obstalabs/hivebus and
+// declare the old path, so `go install ...@latest` fails to resolve them. Retract so the
+// toolchain skips them and selects a valid release.
+retract (
+	v0.1.1
+	v0.2.0
+)

@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"io"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
 )
@@ -13,6 +14,22 @@ type versionOutput struct {
 	BuildDate string `json:"build_date"`
 }
 
+// resolveVersion prefers the LDFLAGS-injected version (from `make build`); when that is
+// absent — a plain `go install module@version` build — it falls back to the module version
+// embedded in the binary by the Go toolchain, so a released binary reports its real version
+// instead of the "dev" default.
+func resolveVersion() string {
+	if Version != "dev" {
+		return Version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return Version
+}
+
 func newVersionCommand() *cobra.Command {
 	var jsonOutput bool
 
@@ -20,8 +37,9 @@ func newVersionCommand() *cobra.Command {
 		Use:   "version",
 		Short: "Print build information",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			resolved := resolveVersion()
 			out := versionOutput{
-				Version:   Version,
+				Version:   resolved,
 				Commit:    Commit,
 				BuildDate: BuildDate,
 			}
@@ -32,7 +50,7 @@ func newVersionCommand() *cobra.Command {
 
 			_, err := io.WriteString(
 				cmd.OutOrStdout(),
-				"hivebus "+Version+" ("+Commit+") built "+BuildDate+"\n",
+				"hivebus "+resolved+" ("+Commit+") built "+BuildDate+"\n",
 			)
 			return err
 		},
