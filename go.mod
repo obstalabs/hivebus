@@ -26,6 +26,6 @@ require (
 // declare the old path, so `go install ...@latest` fails to resolve them. Retract so the
 // toolchain skips them and selects a valid release.
 retract (
-	v0.1.1
 	v0.2.0
+	v0.1.1
 )
