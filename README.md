@@ -87,11 +87,14 @@ Hivebus follows RootOps principles:
 Get a second agent talking to a first one. No human relaying messages between terminals --
 one agent asks, another answers, over a signed channel.
 
-Install (needs Go; prebuilt binaries are on the roadmap):
+Install with Go:
 
 ```bash
 go install github.com/obstalabs/hivebus/cmd/hivebus@latest
 ```
+
+Or grab a prebuilt binary for macOS/Linux (amd64/arm64) from the
+[releases page](https://github.com/obstalabs/hivebus/releases).
 
 Then run the loop in three terminals. The bus binds loopback; nothing leaves your machine.
 
