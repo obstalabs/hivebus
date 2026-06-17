@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-17
+
+### Fixed
+
+- `go install github.com/obstalabs/hivebus/cmd/hivebus@latest` now resolves to a valid release. The `v0.1.1` and `v0.2.0` tags predate the module-path migration and declare the old path; they are now `retract`ed in `go.mod` so the toolchain skips them.
+- `hivebus version` now reports the real module version for `go install`-built binaries (via embedded build info) instead of the `dev` placeholder; `make build` still injects the exact version/commit/date.
+
 ## [0.3.0] - 2026-06-17
 
 ### Added
