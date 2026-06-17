@@ -18,6 +18,14 @@ The product shape behind this repo is:
 - once the diagnosis is verified, Hivebus drafts a work order for `workledger`, with optional execution integration to `hiveram.com`.
 - this repo is the whole open core; live-session integration layers stay out of tree under the [boundary charter](docs/BOUNDARY.md).
 
+A few names above refer to the wider stack this composes with — all optional, none required to run hivebus:
+
+- **`nullbot`** — an intake collector that opens a thread with evidence; the open-core intake surface lives here.
+- **`workledger`** — the command-line client for [Hiveram](https://hiveram.com), our commercial execution ledger. Hivebus drafts work orders *for* it; Hiveram records and routes the work. Hivebus itself never needs it to run — the bridge is optional and the protocol is open.
+- **[NeuroRouter](https://neurorouter.dev)** — the commercial live-session bridge: it lets a *running* agent session answer from its own warm context, the out-of-tree layer the boundary charter draws the line at.
+
+That is the honest shape: hivebus is the free, MIT, self-hostable channel; the paid products ([Hiveram](https://hiveram.com), [NeuroRouter](https://neurorouter.dev), [Bulwark](https://obstalabs.dev/bulwark)) sit *above* the bus and compose with it through the open protocol. They cannot make the channel non-open.
+
 ## Licensing Model
 
 This repository is the MIT open core for Hivebus. It is not a teaser for a separate paid Hivebus edition.
