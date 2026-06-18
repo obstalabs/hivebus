@@ -1,0 +1,76 @@
+#!/bin/sh
+# hivebus-fleet — a thin wrapper so a fleet of agents on one machine can ask each
+# other "what are you working on?" over hivebus. It calls the real `hivebus` CLI;
+# there is no extra protocol here. See docs/guides/fleet-coordination.md.
+#
+# Usage:
+#   hivebus-fleet bus                              # start the shared bus (foreground)
+#   hivebus-fleet join <agent> <repo> [wo]         # run a background answerer for this session
+#   hivebus-fleet ask  <agent> [repo]              # ask a named agent its repo_status
+#
+# Env:
+#   HIVEBUS_FLEET_SERVER   bus URL          (default http://127.0.0.1:7097)
+#   HIVEBUS_FLEET_LISTEN   bus bind address (default 127.0.0.1:7097)
+#   HIVEBUS_FLEET_DB       bus db path      (default ~/.hivebus/fleet.db)
+#   HIVEBUS_BIN            hivebus binary   (default: hivebus on PATH)
+
+set -eu
+
+SERVER="${HIVEBUS_FLEET_SERVER:-http://127.0.0.1:7097}"
+LISTEN="${HIVEBUS_FLEET_LISTEN:-127.0.0.1:7097}"
+DB="${HIVEBUS_FLEET_DB:-$HOME/.hivebus/fleet.db}"
+BIN="${HIVEBUS_BIN:-hivebus}"
+
+die() { echo "hivebus-fleet: $*" >&2; exit 2; }
+slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '-'; }
+
+cmd="${1:-}"
+[ -n "$cmd" ] || die "usage: hivebus-fleet bus|join|ask ... (see docs/guides/fleet-coordination.md)"
+shift || true
+
+case "$cmd" in
+  bus)
+    # The shared channel. Loopback-only; no auth for a single-operator local fleet.
+    mkdir -p "$(dirname "$DB")"
+    echo "hivebus-fleet: bus on $LISTEN (db $DB)" >&2
+    exec env -u WORKLEDGER_API_KEY "$BIN" serve --auth-disabled --listen "$LISTEN" --db "$DB"
+    ;;
+
+  join)
+    # Run an answerer for THIS agent: it answers repo_status about its own repo.
+    # The --wo provenance is what a peer reads to learn the work order.
+    agent="${1:-}"; repo="${2:-}"; wo="${3:-}"
+    [ -n "$agent" ] && [ -n "$repo" ] || die "usage: hivebus-fleet join <agent> <repo> [wo]"
+    [ -d "$repo" ] || die "repo not found: $repo"
+    session="$(slug "$agent")-$$"
+    keyfile="$HOME/.hivebus/$(slug "$agent").seed"
+    if [ ! -f "$keyfile" ]; then
+      mkdir -p "$HOME/.hivebus"
+      head -c 32 /dev/urandom | base64 > "$keyfile"
+      chmod 600 "$keyfile"
+    fi
+    set -- answer --server "$SERVER" --insecure \
+      --agent "$agent" --session-id "$session" \
+      --signing-key "$(cat "$keyfile")" --repo "$repo" --project fleet
+    [ -n "$wo" ] && set -- "$@" --wo "$wo"
+    echo "hivebus-fleet: $agent answering for $repo${wo:+ (wo $wo)}" >&2
+    exec env -u WORKLEDGER_API_KEY "$BIN" "$@"
+    ;;
+
+  ask)
+    # Ask a NAMED agent what it is working on. Prints the signed repo_status.
+    # (You must know which agent to address — there is no roster broadcast yet;
+    #  see the "Known limitation" section of the guide.)
+    agent="${1:-}"; repo="${2:-$PWD}"
+    [ -n "$agent" ] || die "usage: hivebus-fleet ask <agent> [repo]"
+    asker="asker-$$"
+    echo "what work order are you on?" | env -u WORKLEDGER_API_KEY "$BIN" ask \
+      --server "$SERVER" --insecure \
+      --to "$agent" --from "fleet/$asker" --type repo_status \
+      --repo "$repo" --session-id "$asker" --timeout 6s
+    ;;
+
+  *)
+    die "unknown command '$cmd' (want: bus | join | ask)"
+    ;;
+esac
