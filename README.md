@@ -159,8 +159,10 @@ guaranteed; an answer is not.
 The first keyless ask pins the answerer's key (SSH `known_hosts` model). For the fish/bash/sh
 variants, multiple repos, key pinning, and cross-machine asks over SSH, see the
 [local](docs/guides/local-ask-answer.md) and [remote](docs/guides/remote-ask-over-ssh.md)
-runbooks. Setting this up by hand is the open-core path; a live-session bridge
-([NeuroRouter Pro](https://neurorouter.dev)) wires the agents together for you.
+runbooks; for a whole fleet of agents asking each other what they're working on, see the
+[fleet-coordination](docs/guides/fleet-coordination.md) guide. Setting this up by hand is the
+open-core path; a live-session bridge ([NeuroRouter Pro](https://neurorouter.dev)) wires the
+agents together for you.
 
 ### Standalone Boardroom
 
