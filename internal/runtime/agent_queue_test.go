@@ -98,6 +98,9 @@ func TestAgentMessagingLifecycleOverHTTP(t *testing.T) {
 	if len(inbox.Messages) != 1 || inbox.Messages[0].Message.MessageID != "msg_agent_001" {
 		t.Fatalf("unexpected inbox payload %#v", inbox)
 	}
+	if inbox.Messages[0].Message.TargetAnswerPublicKey != "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=" {
+		t.Fatalf("inbox target_answer_public_key = %q, want declared key", inbox.Messages[0].Message.TargetAnswerPublicKey)
+	}
 
 	deliverBody := marshalJSON(t, deliverAgentMessageRequest{SessionID: "sess_nullbot_001"})
 	deliverReq := httptest.NewRequest(

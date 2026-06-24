@@ -28,6 +28,7 @@ type server struct {
 	artifacts  *artifact.Store
 	workOrders WorkOrderBridge
 	syncHooks  map[string]ExecutionSyncHook
+	now        func() time.Time // WO-161: test-only clock hook for exact HTTP fixtures.
 }
 
 func NewHandler(st *store.Store, artifacts *artifact.Store, keys *KeyStore) http.Handler {
@@ -40,11 +41,16 @@ func NewHandlerWithOptions(
 	keys *KeyStore,
 	options HandlerOptions,
 ) http.Handler {
+	now := options.Now
+	if now == nil {
+		now = currentTime
+	}
 	srv := &server{
 		store:      st,
 		artifacts:  artifacts,
 		workOrders: options.WorkOrders,
 		syncHooks:  options.SyncHooks,
+		now:        now,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", srv.handleHealthz)
@@ -216,4 +222,11 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func currentTime() time.Time {
 	return time.Now().UTC()
+}
+
+func (s *server) currentTime() time.Time {
+	if s == nil || s.now == nil {
+		return currentTime()
+	}
+	return s.now().UTC()
 }

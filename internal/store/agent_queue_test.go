@@ -109,6 +109,12 @@ func TestQueuePeekDeliverAgentMessageLifecycle(t *testing.T) {
 	if len(inbox) != 1 || inbox[0].Message.MessageID != "msg_agent_001" {
 		t.Fatalf("unexpected inbox %#v", inbox)
 	}
+	if inbox[0].Message.TargetAnswerPublicKey != sampleAgentAnswerPublicKey {
+		t.Fatalf("inbox target_answer_public_key = %q, want sample key", inbox[0].Message.TargetAnswerPublicKey)
+	}
+	if inbox[0].Events[0].TargetSessionID != "sess_nullbot_001" {
+		t.Fatalf("queued event target_session_id = %q, want sess_nullbot_001", inbox[0].Events[0].TargetSessionID)
+	}
 
 	delivered, err := st.DeliverAgentMessage(
 		t.Context(),

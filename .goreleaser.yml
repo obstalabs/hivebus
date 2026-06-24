@@ -2,25 +2,36 @@ version: 2
 
 project_name: hivebus
 
+release:
+  name_template: "v{{ .Version }}"
+
 builds:
   - main: ./cmd/hivebus/
     binary: hivebus
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
     ldflags:
       - -s -w
       - -X github.com/obstalabs/hivebus/internal/cli.Version={{ .Version }}
-      - -X github.com/obstalabs/hivebus/internal/cli.Commit={{ .ShortCommit }}
-      - -X github.com/obstalabs/hivebus/internal/cli.BuildDate={{ .CommitDate }}
+      - -X github.com/obstalabs/hivebus/internal/cli.BinarySHA={{ .FullCommit }}
+      - -X github.com/obstalabs/hivebus/internal/cli.BinaryBuiltAt={{ .Date }}
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
 
 archives:
-  - formats: [tar.gz]
+  - formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 

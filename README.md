@@ -22,9 +22,9 @@ A few names above refer to the wider stack this composes with — all optional, 
 
 - **`nullbot`** — an intake collector that opens a thread with evidence; the open-core intake surface lives here.
 - **`workledger`** — the command-line client for [Hiveram](https://hiveram.com), our commercial execution ledger. Hivebus drafts work orders *for* it; Hiveram records and routes the work. Hivebus itself never needs it to run — the bridge is optional and the protocol is open.
-- **[NeuroRouter](https://neurorouter.dev)** — the commercial live-session bridge: it lets a *running* agent session answer from its own warm context, the out-of-tree layer the boundary charter draws the line at.
+- **[NeuroRouter Pro](https://neurorouter.dev)** — the commercial live-session bridge: it lets a *running* agent session answer from its own warm context, the out-of-tree layer the boundary charter draws the line at.
 
-That is the honest shape: hivebus is the free, MIT, self-hostable channel; the paid products ([Hiveram](https://hiveram.com), [NeuroRouter](https://neurorouter.dev), [Bulwark](https://obstalabs.dev/bulwark)) sit *above* the bus and compose with it through the open protocol. They cannot make the channel non-open.
+That is the honest shape: hivebus is the free, MIT, self-hostable channel; the paid products ([Hiveram](https://hiveram.com), [NeuroRouter Pro](https://neurorouter.dev), [Bulwark](https://obstalabs.dev/bulwark)) sit *above* the bus and compose with it through the open protocol. They cannot make the channel non-open.
 
 ## Licensing Model
 
@@ -87,14 +87,45 @@ Hivebus follows RootOps principles:
 Get a second agent talking to a first one. No human relaying messages between terminals --
 one agent asks, another answers, over a signed channel.
 
-Install with Go:
+Install with Go when you already have a Go toolchain:
 
 ```bash
 go install github.com/obstalabs/hivebus/cmd/hivebus@latest
 ```
 
-Or grab a prebuilt binary for macOS/Linux (amd64/arm64) from the
-[releases page](https://github.com/obstalabs/hivebus/releases).
+Or install from a release archive. Tagged releases publish standalone binaries for
+macOS, Linux, and Windows on amd64 and arm64, plus `checksums.txt`. Windows
+archives are `.zip`; macOS and Linux archives are `.tar.gz`. Homebrew is optional
+and not required for installation.
+
+```bash
+# macOS/Linux example: pick darwin or linux, amd64 or arm64
+version=0.4.0 # replace with the latest release version, without the leading "v"
+os=darwin
+arch=arm64
+curl -L -o hivebus.tar.gz \
+  "https://github.com/obstalabs/hivebus/releases/download/v${version}/hivebus_${version}_${os}_${arch}.tar.gz"
+tar -xzf hivebus.tar.gz
+install -m 0755 hivebus /usr/local/bin/hivebus
+```
+
+```powershell
+# Windows example: pick amd64 or arm64
+$Version = "0.4.0" # replace with the latest release version, without the leading "v"
+$Arch = "amd64"
+Invoke-WebRequest `
+  -OutFile hivebus.zip `
+  -Uri "https://github.com/obstalabs/hivebus/releases/download/v$Version/hivebus_${Version}_windows_$Arch.zip"
+tar -xf hivebus.zip
+.\hivebus.exe version
+```
+
+Homebrew users can also install from the optional tap when a formula has been
+published:
+
+```bash
+brew install obstalabs/tap/hivebus
+```
 
 Then run the loop in three terminals. The bus binds loopback; nothing leaves your machine.
 
@@ -129,7 +160,32 @@ The first keyless ask pins the answerer's key (SSH `known_hosts` model). For the
 variants, multiple repos, key pinning, and cross-machine asks over SSH, see the
 [local](docs/guides/local-ask-answer.md) and [remote](docs/guides/remote-ask-over-ssh.md)
 runbooks. Setting this up by hand is the open-core path; a live-session bridge
-([NeuroRouter](https://neurorouter.dev)) wires the agents together for you.
+([NeuroRouter Pro](https://neurorouter.dev)) wires the agents together for you.
+
+### Standalone Boardroom
+
+`hivebus` can also act as the small boardroom binary for processes that do not run
+under an orchestrator such as NeuroRouter Pro. Start the runtime, have one participant listen, and let another
+participant say into that inbox:
+
+```bash
+# terminal 1 -- local bus
+hivebus serve --auth-disabled --listen 127.0.0.1:7097 --db /tmp/hivebus-boardroom.db
+
+# terminal 2 -- Codex or any non-orchestrated process registers and listens
+hivebus listen --server http://127.0.0.1:7097 --insecure \
+  --session-id codex-1 --participant codex/hivebus --ack
+
+# terminal 3 -- another participant sends a plain boardroom message
+echo "please read /tmp/handshake.md and ack" | hivebus say \
+  --server http://127.0.0.1:7097 --insecure \
+  --from architect/hivebus --session-id architect-1 --to codex/hivebus
+```
+
+Use `hivebus ask` when the message is a bounded signed question/answer exchange;
+use `say`/`inbox`/`listen` when you just need a generic local boardroom. The guide
+[docs/guides/standalone-boardroom.md](docs/guides/standalone-boardroom.md) covers
+the command surface and the embedding/conformance boundary.
 
 ## Usage
 
@@ -149,6 +205,11 @@ hivebus sample-case
 
 The `nr.run.*` receipt protocol is documented in
 [docs/protocols/nr-run-envelopes.md](docs/protocols/nr-run-envelopes.md).
+
+Embedding and conformance:
+
+- `github.com/obstalabs/hivebus/embed` serves the same runtime over a caller-owned listener for products that need in-process local IPC.
+- `github.com/obstalabs/hivebus/conformance` exposes importable golden JSON fixtures so external consumers can prove their `/v0/agents/*` wire payloads still match Hivebus.
 
 Show build metadata:
 
@@ -217,7 +278,7 @@ session answer from its own warm context** ("what am I actually working on? whic
 did I pick?"), and bridging the running sessions of vendor agents into the bus -- is
 live-session integration, which lives out of tree under the
 [boundary charter](docs/BOUNDARY.md). The open bus makes agents talk; connecting their
-live working sessions is the commercial layer ([NeuroRouter](https://neurorouter.dev) /
+live working sessions is the commercial layer ([NeuroRouter Pro](https://neurorouter.dev) /
 [Obsta Labs](https://obstalabs.dev)).
 
 Cross-machine: a dispatched agent reports back. The most demanding case is the one where

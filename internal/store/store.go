@@ -397,6 +397,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			sender_participant_id TEXT NOT NULL,
 			target_participant_id TEXT NOT NULL,
 			target_agent_id TEXT NOT NULL,
+			target_answer_public_key TEXT NOT NULL DEFAULT '',
 			channel_id TEXT NOT NULL DEFAULT '',
 			body TEXT NOT NULL,
 			created_at TEXT NOT NULL,
@@ -468,6 +469,12 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if err := execIgnoreDuplicateColumn(ctx, db, `
 		ALTER TABLE agent_messages ADD COLUMN channel_id TEXT NOT NULL DEFAULT ''
+	`); err != nil {
+		return err
+	}
+	// WO-161: queued inbox reloads must preserve the target session answer key.
+	if err := execIgnoreDuplicateColumn(ctx, db, `
+		ALTER TABLE agent_messages ADD COLUMN target_answer_public_key TEXT NOT NULL DEFAULT ''
 	`); err != nil {
 		return err
 	}

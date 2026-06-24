@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- Public embedding surface for the agent-message runtime: `embed.ServeLocal` serves Hivebus over a caller-provided local listener so another product can host the bus in-process without reimplementing the protocol.
+- Public conformance package for the `/v0/agents/*` wire contract, with importable golden JSON fixtures that external consumers can run in their own CI.
+- Standalone boardroom CLI commands: `hivebus say`, `hivebus inbox`, and `hivebus listen` let a non-orchestrated process send, read, and optionally acknowledge local Hivebus messages.
+- Windows release artifacts are now built alongside macOS and Linux artifacts for amd64 and arm64.
+- README install instructions now cover Go installs, direct release-archive installs, and the optional Homebrew tap.
+- Focused guide for standalone boardroom use and the embedding/conformance boundary.
+
+### Changed
+
+- `hivebus version` now follows the NeuroRouter Pro build-provenance shape, reporting `version`, `binary_sha`, and `binary_built_at`; release builds inject the full commit SHA and build timestamp.
+
+### Fixed
+
+- Conformance raw JSON comparisons now reject trailing data after the single JSON document, and inbox fixtures are verified against the real runtime HTTP response.
+
 ## [0.3.2] - 2026-06-17
 
 ### Added
