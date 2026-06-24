@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Public embedding and conformance surfaces for the agent-message runtime: `embed` serves Hivebus over a caller-provided listener, and `conformance` publishes importable golden fixtures for the `/v0/agents/*` wire contract.
+- Standalone boardroom CLI commands: `hivebus say`, `hivebus inbox`, and `hivebus listen` let a non-NeuroRouter process send, read, and optionally acknowledge local Hivebus messages.
+- Focused guide for standalone boardroom use and the embedding/conformance boundary.
+
 ## [0.3.2] - 2026-06-17
 
 ### Added

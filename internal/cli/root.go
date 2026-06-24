@@ -29,6 +29,9 @@ work-order derivation as typed JSON threads instead of ad hoc text blobs.`,
 	cmd.AddCommand(newSampleCommand())
 	cmd.AddCommand(newAskCommand())    // WO-84: signed read-only query/answer primitive.
 	cmd.AddCommand(newAnswerCommand()) // WO-95: conservative registered answerer loop.
+	cmd.AddCommand(newSayCommand())    // WO-153: standalone generic boardroom send.
+	cmd.AddCommand(newInboxCommand())  // WO-153: standalone generic boardroom inbox.
+	cmd.AddCommand(newListenCommand()) // WO-153: bounded boardroom inbox polling.
 	cmd.AddCommand(newServeCommand())
 	cmd.AddCommand(newWatchCommand())
 

@@ -131,6 +131,31 @@ variants, multiple repos, key pinning, and cross-machine asks over SSH, see the
 runbooks. Setting this up by hand is the open-core path; a live-session bridge
 ([NeuroRouter](https://neurorouter.dev)) wires the agents together for you.
 
+### Standalone Boardroom
+
+`hivebus` can also act as the small boardroom binary for processes that do not run
+under NeuroRouter. Start the runtime, have one participant listen, and let another
+participant say into that inbox:
+
+```bash
+# terminal 1 -- local bus
+hivebus serve --auth-disabled --listen 127.0.0.1:7097 --db /tmp/hivebus-boardroom.db
+
+# terminal 2 -- Codex or any non-NR process registers and listens
+hivebus listen --server http://127.0.0.1:7097 --insecure \
+  --session-id codex-1 --participant codex/hivebus --ack
+
+# terminal 3 -- another participant sends a plain boardroom message
+echo "please read /tmp/handshake.md and ack" | hivebus say \
+  --server http://127.0.0.1:7097 --insecure \
+  --from architect/hivebus --session-id architect-1 --to codex/hivebus
+```
+
+Use `hivebus ask` when the message is a bounded signed question/answer exchange;
+use `say`/`inbox`/`listen` when you just need a generic local boardroom. The guide
+[docs/guides/standalone-boardroom.md](docs/guides/standalone-boardroom.md) covers
+the command surface and the embedding/conformance boundary.
+
 ## Usage
 
 Build from a clone instead of `go install`:
@@ -149,6 +174,11 @@ hivebus sample-case
 
 The `nr.run.*` receipt protocol is documented in
 [docs/protocols/nr-run-envelopes.md](docs/protocols/nr-run-envelopes.md).
+
+Embedding and conformance:
+
+- `github.com/obstalabs/hivebus/embed` serves the same runtime over a caller-owned listener for products that need in-process local IPC.
+- `github.com/obstalabs/hivebus/conformance` exposes importable golden JSON fixtures so external consumers can prove their `/v0/agents/*` wire payloads still match Hivebus.
 
 Show build metadata:
 
