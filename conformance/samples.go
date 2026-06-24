@@ -41,13 +41,6 @@ type DeliverMessageRequest struct {
 	SessionID string `json:"session_id"`
 }
 
-// InboxQuery is the addressing for GET /v0/agents/sessions/{sessionID}/inbox.
-// The inbox takes no body; the session id is a path parameter. The fixture pins
-// the addressing contract so a consumer constructs the path identically.
-type InboxQuery struct {
-	SessionID string `json:"session_id"`
-}
-
 // AgentSession is the public roster session shape (GET /v0/agents/sessions).
 type AgentSession struct {
 	AgentID           string   `json:"agent_id"`
@@ -70,6 +63,50 @@ type AgentSession struct {
 type RosterResponse struct {
 	Status   string         `json:"status"`
 	Sessions []AgentSession `json:"sessions"`
+}
+
+// InboxResponse is the GET /v0/agents/sessions/{sessionID}/inbox response body
+// pinned by WO-159.
+type InboxResponse struct {
+	Status   string         `json:"status"`
+	Session  AgentSession   `json:"session"`
+	Messages []MessageEntry `json:"messages"`
+}
+
+// MessageEntry is one inbox message with its delivery event history.
+type MessageEntry struct {
+	Message AgentMessage   `json:"message"`
+	Events  []MessageEvent `json:"events"`
+}
+
+// AgentMessage is the public queued-message shape returned in inbox responses.
+type AgentMessage struct {
+	MessageID             string `json:"message_id"`
+	SenderSessionID       string `json:"sender_session_id"`
+	SenderParticipantID   string `json:"sender_participant_id"`
+	TargetParticipantID   string `json:"target_participant_id"`
+	TargetAgentID         string `json:"target_agent_id,omitempty"`
+	TargetAnswerPublicKey string `json:"target_answer_public_key,omitempty"`
+	ChannelID             string `json:"channel_id,omitempty"`
+	Body                  string `json:"body"`
+	CreatedAt             string `json:"created_at"`
+	ExpiresAt             string `json:"expires_at"`
+	State                 string `json:"state"`
+	DeliveredSessionID    string `json:"delivered_session_id,omitempty"`
+	DeliveredAt           string `json:"delivered_at,omitempty"`
+	Reason                string `json:"reason,omitempty"`
+}
+
+// MessageEvent is one delivery-state transition in an inbox message history.
+type MessageEvent struct {
+	Sequence        int64  `json:"sequence"`
+	MessageID       string `json:"message_id"`
+	EventAt         string `json:"event_at"`
+	State           string `json:"state"`
+	TargetSessionID string `json:"target_session_id,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	ExpiresAt       string `json:"expires_at,omitempty"`
+	QueuePosition   int    `json:"queue_position,omitempty"`
 }
 
 // Sample returns the canonical sample value for a route. These values are
@@ -102,29 +139,62 @@ func Sample(route Route) any {
 	case RouteMessageDeliver:
 		return DeliverMessageRequest{SessionID: "nr-session-2"}
 	case RouteInbox:
-		return InboxQuery{SessionID: "nr-session-1"}
-	case RouteRoster:
-		return RosterResponse{
-			Status: "ok",
-			Sessions: []AgentSession{
+		return InboxResponse{
+			Status:  "ok",
+			Session: sampleAgentSession(),
+			Messages: []MessageEntry{
 				{
-					AgentID:         "claude/hivebus",
-					InstallationID:  "install-1",
-					SessionID:       "nr-session-1",
-					ParticipantID:   "nr-participant-1",
-					Capabilities:    []string{"repo_status", "canonical_worktree_status"},
-					Roles:           []string{"worker"},
-					AnswerPublicKey: "ed25519:AAAA",
-					DeliveryMode:    "queued_delivery",
-					SessionStatus:   "online",
-					LeaseExpiresAt:  "2026-01-01T00:02:00Z",
-					HostAlias:       "host-a",
-					RegisteredAt:    "2026-01-01T00:00:00Z",
-					LastSeenAt:      "2026-01-01T00:01:00Z",
+					Message: AgentMessage{
+						MessageID:             "hbm-1",
+						SenderSessionID:       "nr-session-2",
+						SenderParticipantID:   "nr-participant-2",
+						TargetParticipantID:   "nr-participant-1",
+						TargetAgentID:         "claude/hivebus",
+						TargetAnswerPublicKey: "ed25519:AAAA",
+						Body:                  "what work order are you on?",
+						CreatedAt:             "2026-01-01T00:00:30Z",
+						ExpiresAt:             "2026-01-01T00:10:30Z",
+						State:                 "queued",
+						DeliveredAt:           "0001-01-01T00:00:00Z",
+					},
+					Events: []MessageEvent{
+						{
+							Sequence:        1,
+							MessageID:       "hbm-1",
+							EventAt:         "2026-01-01T00:00:30Z",
+							State:           "queued",
+							TargetSessionID: "nr-session-1",
+							ExpiresAt:       "2026-01-01T00:10:30Z",
+							QueuePosition:   1,
+						},
+					},
 				},
 			},
 		}
+	case RouteRoster:
+		return RosterResponse{
+			Status:   "ok",
+			Sessions: []AgentSession{sampleAgentSession()},
+		}
 	default:
 		return nil
+	}
+}
+
+func sampleAgentSession() AgentSession {
+	return AgentSession{
+		AgentID:         "claude/hivebus",
+		InstallationID:  "install-1",
+		SessionID:       "nr-session-1",
+		ParticipantID:   "nr-participant-1",
+		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
+		Roles:           []string{"worker"},
+		AnswerPublicKey: "ed25519:AAAA",
+		DeliveryMode:    "queued_delivery",
+		SessionStatus:   "online",
+		LeaseExpiresAt:  "2026-01-01T00:02:00Z",
+		HostAlias:       "host-a",
+		RegisteredAt:    "2026-01-01T00:00:00Z",
+		LastSeenAt:      "2026-01-01T00:01:00Z",
 	}
 }

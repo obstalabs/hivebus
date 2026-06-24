@@ -168,13 +168,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("embed: shutdown wait: %w", ctx.Err())
 	}
+	// WO-158: cleanup owned dependencies even after a non-clean serve exit.
+	var result error
 	if err := s.Err(); err != nil {
-		return fmt.Errorf("embed: serve: %w", err)
+		result = errors.Join(result, fmt.Errorf("embed: serve: %w", err))
 	}
 	if err := s.closeOwned(); err != nil {
-		return err
+		result = errors.Join(result, err)
 	}
-	return nil
+	return result
 }
 
 // Err returns the serve goroutine's terminal error without waiting, or nil if it

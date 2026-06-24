@@ -48,22 +48,39 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 
 	deliverRequest := deliverAgentMessageRequest{SessionID: "nr-session-2"}
 	roster := rosterResponse{
-		Status: "ok",
-		Sessions: []store.AgentSession{
+		Status:   "ok",
+		Sessions: []store.AgentSession{conformanceAgentSession()},
+	}
+
+	// WO-159: pin the runtime inbox response body, not only path addressing.
+	inbox := inboxResponse{
+		Status:  "ok",
+		Session: conformanceAgentSession(),
+		Messages: []store.AgentMessageRecord{
 			{
-				AgentID:         "claude/hivebus",
-				InstallationID:  "install-1",
-				SessionID:       "nr-session-1",
-				ParticipantID:   "nr-participant-1",
-				Capabilities:    []string{"repo_status", "canonical_worktree_status"},
-				Roles:           []string{"worker"},
-				AnswerPublicKey: "ed25519:AAAA",
-				DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
-				SessionStatus:   model.AgentSessionStatus("online"),
-				LeaseExpiresAt:  time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC),
-				HostAlias:       "host-a",
-				RegisteredAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-				LastSeenAt:      time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
+				Message: store.AgentMessage{
+					MessageID:             "hbm-1",
+					SenderSessionID:       "nr-session-2",
+					SenderParticipantID:   "nr-participant-2",
+					TargetParticipantID:   "nr-participant-1",
+					TargetAgentID:         "claude/hivebus",
+					TargetAnswerPublicKey: "ed25519:AAAA",
+					Body:                  "what work order are you on?",
+					CreatedAt:             time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC),
+					ExpiresAt:             time.Date(2026, 1, 1, 0, 10, 30, 0, time.UTC),
+					State:                 model.DeliveryReceiptQueued,
+				},
+				Events: []store.AgentMessageEvent{
+					{
+						Sequence:        1,
+						MessageID:       "hbm-1",
+						EventAt:         time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC),
+						State:           model.DeliveryReceiptQueued,
+						TargetSessionID: "nr-session-1",
+						ExpiresAt:       time.Date(2026, 1, 1, 0, 10, 30, 0, time.UTC),
+						QueuePosition:   1,
+					},
+				},
 			},
 		},
 	}
@@ -76,6 +93,7 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 		{conformance.RouteSessionHeartbeat, sessionPayload},
 		{conformance.RouteMessageSend, sendRequest},
 		{conformance.RouteMessageDeliver, deliverRequest},
+		{conformance.RouteInbox, inbox},
 		{conformance.RouteRoster, roster},
 	}
 
@@ -87,5 +105,23 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 		if err := conformance.CompareBytes(c.route, got); err != nil {
 			t.Errorf("internal type drifted from contract: %v", err)
 		}
+	}
+}
+
+func conformanceAgentSession() store.AgentSession {
+	return store.AgentSession{
+		AgentID:         "claude/hivebus",
+		InstallationID:  "install-1",
+		SessionID:       "nr-session-1",
+		ParticipantID:   "nr-participant-1",
+		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
+		Roles:           []string{"worker"},
+		AnswerPublicKey: "ed25519:AAAA",
+		DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
+		SessionStatus:   model.AgentSessionStatus("online"),
+		LeaseExpiresAt:  time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC),
+		HostAlias:       "host-a",
+		RegisteredAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		LastSeenAt:      time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
 	}
 }

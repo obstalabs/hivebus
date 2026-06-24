@@ -1,3 +1,51 @@
 {
-  "session_id": "nr-session-1"
+  "messages": [
+    {
+      "events": [
+        {
+          "event_at": "2026-01-01T00:00:30Z",
+          "expires_at": "2026-01-01T00:10:30Z",
+          "message_id": "hbm-1",
+          "queue_position": 1,
+          "sequence": 1,
+          "state": "queued",
+          "target_session_id": "nr-session-1"
+        }
+      ],
+      "message": {
+        "body": "what work order are you on?",
+        "created_at": "2026-01-01T00:00:30Z",
+        "delivered_at": "0001-01-01T00:00:00Z",
+        "expires_at": "2026-01-01T00:10:30Z",
+        "message_id": "hbm-1",
+        "sender_participant_id": "nr-participant-2",
+        "sender_session_id": "nr-session-2",
+        "state": "queued",
+        "target_agent_id": "claude/hivebus",
+        "target_answer_public_key": "ed25519:AAAA",
+        "target_participant_id": "nr-participant-1"
+      }
+    }
+  ],
+  "session": {
+    "agent_id": "claude/hivebus",
+    "answer_public_key": "ed25519:AAAA",
+    "capabilities": [
+      "repo_status",
+      "canonical_worktree_status"
+    ],
+    "delivery_mode": "queued_delivery",
+    "host_alias": "host-a",
+    "installation_id": "install-1",
+    "last_seen_at": "2026-01-01T00:01:00Z",
+    "lease_expires_at": "2026-01-01T00:02:00Z",
+    "participant_id": "nr-participant-1",
+    "registered_at": "2026-01-01T00:00:00Z",
+    "roles": [
+      "worker"
+    ],
+    "session_id": "nr-session-1",
+    "session_status": "online"
+  },
+  "status": "ok"
 }
