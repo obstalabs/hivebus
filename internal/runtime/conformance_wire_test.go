@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -23,19 +26,7 @@ import (
 func TestInternalTypesMatchConformanceContract(t *testing.T) {
 	// Register / heartbeat share model.AgentSessionPayload. Build the internal
 	// value with the SAME field values as conformance.Sample(register).
-	sessionPayload := model.AgentSessionPayload{
-		AgentID:         "claude/hivebus",
-		InstallationID:  "install-1",
-		SessionID:       "nr-session-1",
-		ParticipantID:   "nr-participant-1",
-		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
-		Roles:           []string{"worker"},
-		AnswerPublicKey: "ed25519:AAAA",
-		DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
-		SessionStatus:   model.AgentSessionStatus("online"),
-		LeaseExpiresAt:  "2026-01-01T00:02:00Z",
-		HostAlias:       "host-a",
-	}
+	sessionPayload := conformanceAgentSessionPayload()
 
 	sendRequest := sendAgentMessageRequest{
 		MessageID:           "hbm-1",
@@ -64,7 +55,7 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 					SenderParticipantID:   "nr-participant-2",
 					TargetParticipantID:   "nr-participant-1",
 					TargetAgentID:         "claude/hivebus",
-					TargetAnswerPublicKey: "ed25519:AAAA",
+					TargetAnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
 					Body:                  "what work order are you on?",
 					CreatedAt:             time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC),
 					ExpiresAt:             time.Date(2026, 1, 1, 0, 10, 30, 0, time.UTC),
@@ -108,6 +99,87 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 	}
 }
 
+func TestRuntimeInboxHTTPResponseMatchesConformanceContract(t *testing.T) {
+	st := openTestStore(t)
+	keys := mustTestKeyStore(t)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	handler := NewHandlerWithOptions(st, openTestArtifactStore(t), keys, HandlerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	postJSON := func(method, path string, role Role, value any) *httptest.ResponseRecorder {
+		t.Helper()
+		body := marshalJSON(t, value)
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", conformanceAuthHeader(role))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	registerRec := postJSON(http.MethodPost, "/v0/agents/sessions/register", RoleWorker, conformanceAgentSessionPayload())
+	if registerRec.Code != http.StatusCreated {
+		t.Fatalf("register status = %d, body = %s", registerRec.Code, registerRec.Body.String())
+	}
+
+	now = time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC)
+	sendRec := postJSON(http.MethodPost, "/v0/agents/messages/send", RoleOperator, sendAgentMessageRequest{
+		MessageID:           "hbm-1",
+		SenderSessionID:     "nr-session-2",
+		SenderParticipantID: "nr-participant-2",
+		TargetParticipantID: "nr-participant-1",
+		Body:                "what work order are you on?",
+		TTLSeconds:          600,
+	})
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("send status = %d, body = %s", sendRec.Code, sendRec.Body.String())
+	}
+
+	// WO-161: the real inbox route must match the public fixture after store reload.
+	now = time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC)
+	heartbeatRec := postJSON(http.MethodPost, "/v0/agents/sessions/heartbeat", RoleWorker, conformanceAgentSessionPayload())
+	if heartbeatRec.Code != http.StatusOK {
+		t.Fatalf("heartbeat status = %d, body = %s", heartbeatRec.Code, heartbeatRec.Body.String())
+	}
+
+	inboxReq := httptest.NewRequest(http.MethodGet, "/v0/agents/sessions/nr-session-1/inbox", nil)
+	inboxReq.Header.Set("Authorization", conformanceAuthHeader(RoleWorker))
+	inboxRec := httptest.NewRecorder()
+	handler.ServeHTTP(inboxRec, inboxReq)
+	if inboxRec.Code != http.StatusOK {
+		t.Fatalf("inbox status = %d, body = %s", inboxRec.Code, inboxRec.Body.String())
+	}
+	if err := conformance.CompareBytes(conformance.RouteInbox, inboxRec.Body.Bytes()); err != nil {
+		t.Fatalf("real HTTP inbox response drifted from conformance fixture: %v\nbody: %s", err, inboxRec.Body.String())
+	}
+}
+
+func conformanceAuthHeader(role Role) string {
+	switch role {
+	case RoleOperator:
+		return "Bearer operator-secret"
+	default:
+		return "Bearer worker-secret"
+	}
+}
+
+func conformanceAgentSessionPayload() model.AgentSessionPayload {
+	return model.AgentSessionPayload{
+		AgentID:         "claude/hivebus",
+		InstallationID:  "install-1",
+		SessionID:       "nr-session-1",
+		ParticipantID:   "nr-participant-1",
+		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
+		Roles:           []string{"worker"},
+		AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+		DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
+		SessionStatus:   model.AgentSessionStatus("online"),
+		LeaseExpiresAt:  "2026-01-01T00:02:00Z",
+		HostAlias:       "host-a",
+	}
+}
+
 func conformanceAgentSession() store.AgentSession {
 	return store.AgentSession{
 		AgentID:         "claude/hivebus",
@@ -116,7 +188,7 @@ func conformanceAgentSession() store.AgentSession {
 		ParticipantID:   "nr-participant-1",
 		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
 		Roles:           []string{"worker"},
-		AnswerPublicKey: "ed25519:AAAA",
+		AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
 		DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
 		SessionStatus:   model.AgentSessionStatus("online"),
 		LeaseExpiresAt:  time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC),

@@ -8,6 +8,10 @@
 - Standalone boardroom CLI commands: `hivebus say`, `hivebus inbox`, and `hivebus listen` let a non-NeuroRouter process send, read, and optionally acknowledge local Hivebus messages.
 - Focused guide for standalone boardroom use and the embedding/conformance boundary.
 
+### Fixed
+
+- Conformance raw JSON comparisons now reject trailing data after the single JSON document, and inbox fixtures are verified against the real runtime HTTP response.
+
 ## [0.3.2] - 2026-06-17
 
 ### Added

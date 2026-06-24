@@ -16,6 +16,7 @@ import (
 type HandlerOptions struct {
 	WorkOrders WorkOrderBridge
 	SyncHooks  map[string]ExecutionSyncHook
+	Now        func() time.Time // WO-161: deterministic runtime wire-conformance tests.
 }
 
 type WorkOrderBridge interface {

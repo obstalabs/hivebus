@@ -13,7 +13,7 @@
       "roles": [
         "worker"
       ],
-      "answer_public_key": "ed25519:AAAA",
+      "answer_public_key": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
       "delivery_mode": "queued_delivery",
       "session_status": "online",
       "lease_expires_at": "2026-01-01T00:02:00Z",

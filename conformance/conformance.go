@@ -34,6 +34,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 )
 
@@ -111,7 +112,8 @@ func Compare(route Route, value any) error {
 	return compareJSON(route, got, want)
 }
 
-// CompareBytes is Compare for callers that already have marshaled bytes.
+// CompareBytes is Compare for callers that already have marshaled bytes. The
+// bytes must contain exactly one JSON document; only trailing whitespace is ignored.
 func CompareBytes(route Route, got []byte) error {
 	want, err := Golden(route)
 	if err != nil {
@@ -145,6 +147,14 @@ func normalize(data []byte) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	// WO-162: raw response comparisons must reject data after the single JSON document.
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("trailing JSON value after document")
+		}
 		return nil, err
 	}
 	return json.Marshal(v) // Go marshals map keys sorted, giving a stable form.

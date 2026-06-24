@@ -71,7 +71,7 @@ func (s *server) handleRegisterAgentSession(w http.ResponseWriter, r *http.Reque
 		r.Context(),
 		payload,
 		model.MessageTypeAgentSessionRegistered,
-		currentTime(),
+		s.currentTime(),
 	)
 	switch {
 	case err != nil && isInputError(err):
@@ -97,7 +97,7 @@ func (s *server) handleHeartbeatAgentSession(w http.ResponseWriter, r *http.Requ
 		r.Context(),
 		payload,
 		model.MessageTypeAgentSessionHeartbeat,
-		currentTime(),
+		s.currentTime(),
 	)
 	switch {
 	case err != nil && isInputError(err):
@@ -132,7 +132,7 @@ func (s *server) handleSendAgentMessage(w http.ResponseWriter, r *http.Request) 
 		ChannelID:           request.ChannelID,
 		Body:                request.Body,
 		TTL:                 ttl,
-	}, currentTime())
+	}, s.currentTime())
 	switch {
 	case errors.Is(err, store.ErrChannelNotFound):
 		writeError(w, http.StatusNotFound, err)
@@ -157,7 +157,7 @@ func (s *server) handleUpsertChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := currentTime()
+	now := s.currentTime()
 	if channel.CreatedAt.IsZero() {
 		channel.CreatedAt = now
 	}
@@ -196,7 +196,7 @@ func (s *server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
 func (s *server) handlePeekAgentInbox(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimSpace(r.PathValue("sessionID"))
 	limit := 0
-	session, messages, err := s.store.PeekAgentInbox(r.Context(), sessionID, currentTime(), limit)
+	session, messages, err := s.store.PeekAgentInbox(r.Context(), sessionID, s.currentTime(), limit)
 	switch {
 	case errors.Is(err, store.ErrAgentSessionNotFound):
 		writeError(w, http.StatusNotFound, err)
@@ -214,7 +214,7 @@ func (s *server) handlePeekAgentInbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleListAgentSessions(w http.ResponseWriter, r *http.Request) {
-	sessions, err := s.store.ListAgentSessions(r.Context(), currentTime(), r.URL.Query().Get("prefix"))
+	sessions, err := s.store.ListAgentSessions(r.Context(), s.currentTime(), r.URL.Query().Get("prefix"))
 	switch {
 	case err != nil && isInputError(err):
 		writeError(w, http.StatusBadRequest, err)
@@ -239,7 +239,7 @@ func (s *server) handleDeliverAgentMessage(w http.ResponseWriter, r *http.Reques
 		r.Context(),
 		r.PathValue("messageID"),
 		request.SessionID,
-		currentTime(),
+		s.currentTime(),
 	)
 	switch {
 	case errors.Is(err, store.ErrAgentSessionNotFound), errors.Is(err, store.ErrAgentMessageNotFound):
@@ -260,7 +260,7 @@ func (s *server) handleDeliverAgentMessage(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *server) handleGetAgentMessage(w http.ResponseWriter, r *http.Request) {
-	record, err := s.store.GetAgentMessage(r.Context(), r.PathValue("messageID"), currentTime())
+	record, err := s.store.GetAgentMessage(r.Context(), r.PathValue("messageID"), s.currentTime())
 	switch {
 	case errors.Is(err, store.ErrAgentMessageNotFound):
 		writeError(w, http.StatusNotFound, err)

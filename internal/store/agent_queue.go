@@ -392,17 +392,19 @@ func (s *Store) QueueAgentMessage(
 	}
 	queuePosition++
 
+	var targetSessionID string
 	var targetAgentID string
 	var targetAnswerPublicKey string
 	row := tx.QueryRowContext(ctx, `
-		SELECT agent_id, answer_public_key
+		SELECT session_id, agent_id, answer_public_key
 		FROM agent_sessions
 		WHERE participant_id = ? AND session_status = ? AND lease_expires_at > ?
 		ORDER BY last_seen_at DESC
 		LIMIT 1
 	`, input.TargetParticipantID, string(model.AgentSessionOnline), formatTime(now))
-	switch err := row.Scan(&targetAgentID, &targetAnswerPublicKey); {
+	switch err := row.Scan(&targetSessionID, &targetAgentID, &targetAnswerPublicKey); {
 	case errors.Is(err, sql.ErrNoRows):
+		targetSessionID = ""
 		targetAgentID = ""
 	case err != nil:
 		return AgentMessageRecord{}, fmt.Errorf("lookup target agent session: %w", err)
@@ -415,6 +417,7 @@ func (s *Store) QueueAgentMessage(
 			sender_participant_id,
 			target_participant_id,
 			target_agent_id,
+			target_answer_public_key,
 			channel_id,
 			body,
 			created_at,
@@ -423,13 +426,14 @@ func (s *Store) QueueAgentMessage(
 			delivered_session_id,
 			delivered_at,
 			reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')
 	`,
 		input.MessageID,
 		input.SenderSessionID,
 		input.SenderParticipantID,
 		input.TargetParticipantID,
 		targetAgentID,
+		targetAnswerPublicKey,
 		input.ChannelID,
 		input.Body,
 		formatTime(now),
@@ -448,11 +452,12 @@ func (s *Store) QueueAgentMessage(
 			reason,
 			expires_at,
 			queue_position
-		) VALUES (?, ?, ?, '', '', ?, ?)
+		) VALUES (?, ?, ?, ?, '', ?, ?)
 	`,
 		input.MessageID,
 		formatTime(now),
 		string(model.DeliveryReceiptQueued),
+		targetSessionID,
 		formatTime(expiresAt),
 		queuePosition,
 	); err != nil {
@@ -939,6 +944,7 @@ func loadAgentMessageRecordTx(ctx context.Context, tx *sql.Tx, messageID string)
 			sender_participant_id,
 			target_participant_id,
 			target_agent_id,
+			target_answer_public_key,
 			channel_id,
 			body,
 			created_at,
@@ -956,6 +962,7 @@ func loadAgentMessageRecordTx(ctx context.Context, tx *sql.Tx, messageID string)
 		&record.Message.SenderParticipantID,
 		&record.Message.TargetParticipantID,
 		&record.Message.TargetAgentID,
+		&record.Message.TargetAnswerPublicKey,
 		&record.Message.ChannelID,
 		&record.Message.Body,
 		&createdAt,

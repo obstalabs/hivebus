@@ -22,14 +22,14 @@
         "sender_session_id": "nr-session-2",
         "state": "queued",
         "target_agent_id": "claude/hivebus",
-        "target_answer_public_key": "ed25519:AAAA",
+        "target_answer_public_key": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
         "target_participant_id": "nr-participant-1"
       }
     }
   ],
   "session": {
     "agent_id": "claude/hivebus",
-    "answer_public_key": "ed25519:AAAA",
+    "answer_public_key": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
     "capabilities": [
       "repo_status",
       "canonical_worktree_status"

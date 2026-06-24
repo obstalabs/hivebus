@@ -43,6 +43,26 @@ func TestWireConformance(t *testing.T) {
 // TestEveryRouteHasGoldenAndSample guards completeness: the route table, the
 // sample table, and the embedded fixtures must all agree, so a new route can't be
 // half-added (sample but no fixture, or vice versa).
+
+func TestCompareBytesRejectsTrailingData(t *testing.T) {
+	golden, err := conformance.Golden(conformance.RouteInbox)
+	if err != nil {
+		t.Fatalf("Golden(RouteInbox) error = %v", err)
+	}
+
+	if err := conformance.CompareBytes(conformance.RouteInbox, append(append([]byte{}, golden...), ' ', '\n', '\t')); err != nil {
+		t.Fatalf("CompareBytes with trailing whitespace error = %v", err)
+	}
+
+	if err := conformance.CompareBytes(conformance.RouteInbox, append(append([]byte{}, golden...), []byte(` {"extra":true}`)...)); err == nil {
+		t.Fatal("CompareBytes accepted a second JSON document after the golden payload")
+	}
+
+	if err := conformance.CompareBytes(conformance.RouteInbox, append(append([]byte{}, golden...), []byte(` trailing-bytes`)...)); err == nil {
+		t.Fatal("CompareBytes accepted non-JSON data after the golden payload")
+	}
+}
+
 func TestEveryRouteHasGoldenAndSample(t *testing.T) {
 	if os.Getenv("UPDATE_GOLDEN") == "1" {
 		t.Skip("regeneration run")
