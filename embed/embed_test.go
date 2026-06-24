@@ -213,7 +213,7 @@ func TestServeLocalWithVerifyKeyRequiresAuth(t *testing.T) {
 }
 
 func TestServeLocalRejectsUnauthenticatedNonLocalListener(t *testing.T) {
-	root := shortSocketRoot(t)
+	root := t.TempDir()
 	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatalf("Listen(tcp): %v", err)
