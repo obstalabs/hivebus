@@ -5,10 +5,10 @@ import "github.com/spf13/cobra"
 var (
 	// Version is set at build time via -ldflags.
 	Version = "dev"
-	// Commit is set at build time via -ldflags.
-	Commit = "none"
-	// BuildDate is set at build time via -ldflags.
-	BuildDate = "unknown"
+	// BinarySHA is set at build time via -ldflags.
+	BinarySHA = "dev"
+	// BinaryBuiltAt is set at build time via -ldflags.
+	BinaryBuiltAt = "1970-01-01T00:00:00Z"
 )
 
 // NewRootCommand builds the hivebus CLI.

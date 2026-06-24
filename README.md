@@ -87,14 +87,45 @@ Hivebus follows RootOps principles:
 Get a second agent talking to a first one. No human relaying messages between terminals --
 one agent asks, another answers, over a signed channel.
 
-Install with Go:
+Install with Go when you already have a Go toolchain:
 
 ```bash
 go install github.com/obstalabs/hivebus/cmd/hivebus@latest
 ```
 
-Or grab a prebuilt binary for macOS/Linux (amd64/arm64) from the
-[releases page](https://github.com/obstalabs/hivebus/releases).
+Or install from a release archive. Tagged releases publish standalone binaries for
+macOS, Linux, and Windows on amd64 and arm64, plus `checksums.txt`. Windows
+archives are `.zip`; macOS and Linux archives are `.tar.gz`. Homebrew is optional
+and not required for installation.
+
+```bash
+# macOS/Linux example: pick darwin or linux, amd64 or arm64
+version=0.4.0 # replace with the latest release version, without the leading "v"
+os=darwin
+arch=arm64
+curl -L -o hivebus.tar.gz \
+  "https://github.com/obstalabs/hivebus/releases/download/v${version}/hivebus_${version}_${os}_${arch}.tar.gz"
+tar -xzf hivebus.tar.gz
+install -m 0755 hivebus /usr/local/bin/hivebus
+```
+
+```powershell
+# Windows example: pick amd64 or arm64
+$Version = "0.4.0" # replace with the latest release version, without the leading "v"
+$Arch = "amd64"
+Invoke-WebRequest `
+  -OutFile hivebus.zip `
+  -Uri "https://github.com/obstalabs/hivebus/releases/download/v$Version/hivebus_${Version}_windows_$Arch.zip"
+tar -xf hivebus.zip
+.\hivebus.exe version
+```
+
+Homebrew users can also install from the optional tap when a formula has been
+published:
+
+```bash
+brew install obstalabs/tap/hivebus
+```
 
 Then run the loop in three terminals. The bus binds loopback; nothing leaves your machine.
 
