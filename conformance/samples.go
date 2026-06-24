@@ -1,7 +1,7 @@
 package conformance
 
-// Exported wire mirror structs for the /v0/agents request payloads. These are
-// the CONTRACT a consumer codes against — intentionally decoupled from Hivebus's
+// Exported wire mirror structs for the /v0/agents request and response payloads.
+// These are the CONTRACT a consumer codes against — intentionally decoupled from Hivebus's
 // internal runtime/store types so that an external consumer imports a stable,
 // minimal surface rather than reaching into internal packages. The json tags
 // here MUST match the bytes Hivebus actually reads/writes; the golden fixtures
@@ -48,10 +48,28 @@ type InboxQuery struct {
 	SessionID string `json:"session_id"`
 }
 
-// RosterQuery is the addressing for the roster read (GET /v0/agents/sessions),
-// with the optional participant-prefix filter.
-type RosterQuery struct {
-	Prefix string `json:"prefix,omitempty"`
+// AgentSession is the public roster session shape (GET /v0/agents/sessions).
+type AgentSession struct {
+	AgentID           string   `json:"agent_id"`
+	InstallationID    string   `json:"installation_id"`
+	SessionID         string   `json:"session_id"`
+	ParticipantID     string   `json:"participant_id"`
+	Capabilities      []string `json:"capabilities,omitempty"`
+	Roles             []string `json:"roles,omitempty"`
+	AnswerPublicKey   string   `json:"answer_public_key,omitempty"`
+	DeliveryMode      string   `json:"delivery_mode"`
+	SessionStatus     string   `json:"session_status"`
+	LeaseExpiresAt    string   `json:"lease_expires_at"`
+	HostAlias         string   `json:"host_alias,omitempty"`
+	ReplacesSessionID string   `json:"replaces_session_id,omitempty"`
+	RegisteredAt      string   `json:"registered_at"`
+	LastSeenAt        string   `json:"last_seen_at"`
+}
+
+// RosterResponse is the GET /v0/agents/sessions response body.
+type RosterResponse struct {
+	Status   string         `json:"status"`
+	Sessions []AgentSession `json:"sessions"`
 }
 
 // Sample returns the canonical sample value for a route. These values are
@@ -86,7 +104,26 @@ func Sample(route Route) any {
 	case RouteInbox:
 		return InboxQuery{SessionID: "nr-session-1"}
 	case RouteRoster:
-		return RosterQuery{Prefix: "claude/"}
+		return RosterResponse{
+			Status: "ok",
+			Sessions: []AgentSession{
+				{
+					AgentID:         "claude/hivebus",
+					InstallationID:  "install-1",
+					SessionID:       "nr-session-1",
+					ParticipantID:   "nr-participant-1",
+					Capabilities:    []string{"repo_status", "canonical_worktree_status"},
+					Roles:           []string{"worker"},
+					AnswerPublicKey: "ed25519:AAAA",
+					DeliveryMode:    "queued_delivery",
+					SessionStatus:   "online",
+					LeaseExpiresAt:  "2026-01-01T00:02:00Z",
+					HostAlias:       "host-a",
+					RegisteredAt:    "2026-01-01T00:00:00Z",
+					LastSeenAt:      "2026-01-01T00:01:00Z",
+				},
+			},
+		}
 	default:
 		return nil
 	}

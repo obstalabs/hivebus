@@ -130,6 +130,54 @@ func TestQueuePeekDeliverAgentMessageLifecycle(t *testing.T) {
 	}
 }
 
+func TestListAgentSessionsReturnsFreshOnlineRoster(t *testing.T) {
+	t.Helper()
+
+	st := openTestStore(t)
+	now := time.Date(2026, 4, 18, 2, 30, 0, 0, time.UTC)
+
+	if _, err := st.RegisterAgentSession(
+		t.Context(),
+		sampleAgentSessionPayload("sess_nullbot_001", "agent.field.nullbot", now.Add(30*time.Minute)),
+		model.MessageTypeAgentSessionRegistered,
+		now,
+	); err != nil {
+		t.Fatalf("RegisterAgentSession(nullbot) error = %v", err)
+	}
+	if _, err := st.RegisterAgentSession(
+		t.Context(),
+		sampleAgentSessionPayload("sess_architect_001", "architect.agent", now.Add(30*time.Minute)),
+		model.MessageTypeAgentSessionRegistered,
+		now.Add(time.Minute),
+	); err != nil {
+		t.Fatalf("RegisterAgentSession(architect) error = %v", err)
+	}
+	if _, err := st.RegisterAgentSession(
+		t.Context(),
+		sampleAgentSessionPayload("sess_expired_001", "agent.field.expired", now.Add(-time.Minute)),
+		model.MessageTypeAgentSessionRegistered,
+		now,
+	); err != nil {
+		t.Fatalf("RegisterAgentSession(expired) error = %v", err)
+	}
+
+	all, err := st.ListAgentSessions(t.Context(), now.Add(2*time.Minute), "")
+	if err != nil {
+		t.Fatalf("ListAgentSessions(all) error = %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("all sessions = %#v, want two fresh online sessions", all)
+	}
+
+	filtered, err := st.ListAgentSessions(t.Context(), now.Add(2*time.Minute), "agent.field.")
+	if err != nil {
+		t.Fatalf("ListAgentSessions(filtered) error = %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].ParticipantID != "agent.field.nullbot" {
+		t.Fatalf("filtered sessions = %#v, want only agent.field.nullbot", filtered)
+	}
+}
+
 func TestQueueAgentMessageExpiresBeforeDelivery(t *testing.T) {
 	t.Helper()
 

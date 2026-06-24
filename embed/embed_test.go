@@ -2,34 +2,41 @@ package embed_test
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/obstalabs/hivebus/embed"
-	"github.com/obstalabs/hivebus/internal/artifact"
-	"github.com/obstalabs/hivebus/internal/store"
 )
 
-// newConfig opens fresh store + artifact dirs under root. The host (test) owns
-// them across restart cycles — Serve never closes them.
-func newConfig(t *testing.T, root string) embed.Config {
+// newConfig returns public path-based config; ServeLocal owns opened resources.
+func newConfig(t *testing.T, root string) embed.LocalConfig {
 	t.Helper()
-	st, err := store.Open(filepath.Join(root, "hivebus.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+
+	return embed.LocalConfig{
+		StorePath:    filepath.Join(root, "hivebus.db"),
+		ArtifactRoot: filepath.Join(root, "artifacts"),
 	}
-	t.Cleanup(func() { _ = st.Close() })
-	arts, err := artifact.Open(filepath.Join(root, "artifacts"))
-	if err != nil {
-		t.Fatalf("artifact.Open: %v", err)
+}
+
+// shortSocketRoot keeps macOS unix-socket paths under the platform limit while
+// still using a unique per-test directory.
+// WO-155: the test must pass under default macOS temp settings.
+func shortSocketRoot(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("unix-domain socket tests use the Unix local-IPC primitive")
 	}
-	// Keys nil => auth disabled; the unix socket is the trust boundary here.
-	return embed.Config{Store: st, Artifacts: arts}
+	root, err := os.MkdirTemp("/tmp", "hb-")
+	if err != nil {
+		t.Fatalf("short socket root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	return root
 }
 
 // unixListener binds a Unix domain socket at path. Returns the listener; caller
@@ -65,14 +72,14 @@ func unixGet(t *testing.T, socketPath, route string) (int, error) {
 // TestServeOverInjectedUnixListener is the static half: the runtime serves the
 // existing routes over a caller-provided Unix listener with no TCP daemon.
 func TestServeOverInjectedUnixListener(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketRoot(t)
 	sock := filepath.Join(root, "hb.sock")
 	ln := unixListener(t, sock)
 	cfg := newConfig(t, root)
 
-	srv, err := embed.Serve(context.Background(), ln, cfg)
+	srv, err := embed.ServeLocal(context.Background(), ln, cfg)
 	if err != nil {
-		t.Fatalf("Serve: %v", err)
+		t.Fatalf("ServeLocal: %v", err)
 	}
 
 	code, err := unixGet(t, sock, "/healthz")
@@ -101,18 +108,18 @@ func TestServeOverInjectedUnixListener(t *testing.T) {
 
 // TestRestartLifecycle is the load-bearing half (WO-150 acceptance): a full
 // serve -> shutdown -> rebind cycle on the SAME socket path must leave no orphan.
-// After Shutdown + listener.Close + unlink, a fresh Serve must rebind cleanly;
+// After Shutdown + unlink, a fresh Serve must rebind cleanly;
 // if Shutdown leaked the socket, the second bind would fail with EADDRINUSE.
 func TestRestartLifecycle(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketRoot(t)
 	sock := filepath.Join(root, "hb.sock")
 	cfg := newConfig(t, root)
 
 	for cycle := range 3 {
 		ln := unixListener(t, sock)
-		srv, err := embed.Serve(context.Background(), ln, cfg)
+		srv, err := embed.ServeLocal(context.Background(), ln, cfg)
 		if err != nil {
-			t.Fatalf("cycle %d Serve: %v", cycle, err)
+			t.Fatalf("cycle %d ServeLocal: %v", cycle, err)
 		}
 		code, err := unixGet(t, sock, "/healthz")
 		if err != nil || code != http.StatusOK {
@@ -135,14 +142,14 @@ func TestRestartLifecycle(t *testing.T) {
 // arbitrate leadership; the bound socket is the structural guard, and this test
 // pins that the guard actually holds.
 func TestNoSplitBrainSecondBindFails(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketRoot(t)
 	sock := filepath.Join(root, "hb.sock")
 	cfg := newConfig(t, root)
 
 	ln := unixListener(t, sock)
-	srv, err := embed.Serve(context.Background(), ln, cfg)
+	srv, err := embed.ServeLocal(context.Background(), ln, cfg)
 	if err != nil {
-		t.Fatalf("Serve: %v", err)
+		t.Fatalf("ServeLocal: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = srv.Shutdown(context.Background()) // also closes ln
@@ -157,39 +164,51 @@ func TestNoSplitBrainSecondBindFails(t *testing.T) {
 
 // TestServeRejectsBadConfig guards the required-dependency contract.
 func TestServeRejectsBadConfig(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketRoot(t)
 	ln := unixListener(t, filepath.Join(root, "hb.sock"))
 	t.Cleanup(func() { _ = ln.Close() })
 
-	cases := map[string]embed.Config{
-		"no store":     {Artifacts: mustArtifacts(t, root)},
-		"no artifacts": {Store: mustStore(t, root)},
+	cases := map[string]embed.LocalConfig{
+		"no store path":    {ArtifactRoot: filepath.Join(root, "artifacts")},
+		"no artifact root": {StorePath: filepath.Join(root, "hivebus.db")},
 	}
 	for name, cfg := range cases {
-		if _, err := embed.Serve(context.Background(), ln, cfg); err == nil {
-			t.Fatalf("%s: Serve accepted an invalid config", name)
+		if _, err := embed.ServeLocal(context.Background(), ln, cfg); err == nil {
+			t.Fatalf("%s: ServeLocal accepted an invalid config", name)
 		}
 	}
-	if _, err := embed.Serve(context.Background(), nil, newConfig(t, root)); err == nil {
-		t.Fatalf("nil listener: Serve accepted a nil listener")
+	if _, err := embed.ServeLocal(context.Background(), nil, newConfig(t, root)); err == nil {
+		t.Fatalf("nil listener: ServeLocal accepted a nil listener")
 	}
 }
 
-func mustStore(t *testing.T, root string) *store.Store {
-	t.Helper()
-	st, err := store.Open(filepath.Join(root, fmt.Sprintf("s-%d.db", time.Now().UnixNano())))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st
-}
+func TestErrBeforeShutdownDoesNotConsumeTerminalState(t *testing.T) {
+	root := shortSocketRoot(t)
+	sock := filepath.Join(root, "hb.sock")
+	ln := unixListener(t, sock)
 
-func mustArtifacts(t *testing.T, root string) *artifact.Store {
-	t.Helper()
-	arts, err := artifact.Open(filepath.Join(root, fmt.Sprintf("a-%d", time.Now().UnixNano())))
+	srv, err := embed.ServeLocal(context.Background(), ln, newConfig(t, root))
 	if err != nil {
-		t.Fatalf("artifact.Open: %v", err)
+		t.Fatalf("ServeLocal: %v", err)
 	}
-	return arts
+	if err := ln.Close(); err != nil {
+		t.Fatalf("listener close: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := srv.Err(); err != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := srv.Err(); err == nil {
+		t.Fatalf("Err() did not report the closed listener")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil && ctx.Err() != nil {
+		t.Fatalf("Shutdown after Err waited for context expiry: %v", err)
+	}
 }

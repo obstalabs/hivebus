@@ -44,6 +44,12 @@ type inboxResponse struct {
 	Messages []store.AgentMessageRecord `json:"messages"`
 }
 
+// WO-157: roster response shape is pinned by public conformance fixtures.
+type rosterResponse struct {
+	Status   string               `json:"status"`
+	Sessions []store.AgentSession `json:"sessions"`
+}
+
 type deliverAgentMessageRequest struct {
 	SessionID string `json:"session_id"`
 }
@@ -203,6 +209,21 @@ func (s *server) handlePeekAgentInbox(w http.ResponseWriter, r *http.Request) {
 			Status:   "ok",
 			Session:  session,
 			Messages: messages,
+		})
+	}
+}
+
+func (s *server) handleListAgentSessions(w http.ResponseWriter, r *http.Request) {
+	sessions, err := s.store.ListAgentSessions(r.Context(), currentTime(), r.URL.Query().Get("prefix"))
+	switch {
+	case err != nil && isInputError(err):
+		writeError(w, http.StatusBadRequest, err)
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err)
+	default:
+		writeJSON(w, http.StatusOK, rosterResponse{
+			Status:   "ok",
+			Sessions: sessions,
 		})
 	}
 }

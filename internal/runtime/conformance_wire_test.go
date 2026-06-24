@@ -3,9 +3,11 @@ package runtime
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/obstalabs/hivebus/conformance"
 	"github.com/obstalabs/hivebus/internal/model"
+	"github.com/obstalabs/hivebus/internal/store"
 )
 
 // TestInternalTypesMatchConformanceContract pins that Hivebus's REAL internal
@@ -45,6 +47,26 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 	}
 
 	deliverRequest := deliverAgentMessageRequest{SessionID: "nr-session-2"}
+	roster := rosterResponse{
+		Status: "ok",
+		Sessions: []store.AgentSession{
+			{
+				AgentID:         "claude/hivebus",
+				InstallationID:  "install-1",
+				SessionID:       "nr-session-1",
+				ParticipantID:   "nr-participant-1",
+				Capabilities:    []string{"repo_status", "canonical_worktree_status"},
+				Roles:           []string{"worker"},
+				AnswerPublicKey: "ed25519:AAAA",
+				DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
+				SessionStatus:   model.AgentSessionStatus("online"),
+				LeaseExpiresAt:  time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC),
+				HostAlias:       "host-a",
+				RegisteredAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				LastSeenAt:      time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
+			},
+		},
+	}
 
 	checks := []struct {
 		route conformance.Route
@@ -54,6 +76,7 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 		{conformance.RouteSessionHeartbeat, sessionPayload},
 		{conformance.RouteMessageSend, sendRequest},
 		{conformance.RouteMessageDeliver, deliverRequest},
+		{conformance.RouteRoster, roster},
 	}
 
 	for _, c := range checks {

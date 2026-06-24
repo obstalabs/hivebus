@@ -577,6 +577,73 @@ func (s *Store) PeekAgentInbox(
 	return session, records, nil
 }
 
+// ListAgentSessions returns fresh online sessions for the roster endpoint.
+// WO-157: the conformance roster route must be backed by a real runtime query.
+func (s *Store) ListAgentSessions(
+	ctx context.Context,
+	now time.Time,
+	participantPrefix string,
+) ([]AgentSession, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("store is not initialized")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := s.ensureAgentSessionAnswerPublicKeyColumn(ctx); err != nil {
+		return nil, err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	query := `
+		SELECT
+			agent_id,
+			installation_id,
+			session_id,
+			participant_id,
+			capabilities_json,
+			roles_json,
+			answer_public_key,
+			delivery_mode,
+			session_status,
+			lease_expires_at,
+			host_alias,
+			replaces_session_id,
+			registered_at,
+			last_seen_at
+		FROM agent_sessions
+		WHERE session_status = ? AND lease_expires_at > ?`
+	args := []any{string(model.AgentSessionOnline), formatTime(now)}
+	if prefix := strings.TrimSpace(participantPrefix); prefix != "" {
+		query += ` AND participant_id LIKE ?`
+		args = append(args, prefix+"%")
+	}
+	query += ` ORDER BY participant_id ASC, last_seen_at DESC, session_id ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query agent sessions: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	sessions := make([]AgentSession, 0)
+	for rows.Next() {
+		session, err := loadAgentSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate agent sessions: %w", err)
+	}
+	return sessions, nil
+}
+
 func (s *Store) DeliverAgentMessage(
 	ctx context.Context,
 	messageID string,
@@ -812,6 +879,14 @@ func queuedMessagePositionTx(ctx context.Context, tx *sql.Tx, targetParticipantI
 }
 
 func loadAgentSessionRow(row *sql.Row) (AgentSession, error) {
+	return loadAgentSession(row)
+}
+
+type agentSessionScanner interface {
+	Scan(dest ...any) error
+}
+
+func loadAgentSession(scanner agentSessionScanner) (AgentSession, error) {
 	var session AgentSession
 	var capabilities string
 	var roles string
@@ -820,7 +895,7 @@ func loadAgentSessionRow(row *sql.Row) (AgentSession, error) {
 	var leaseExpiresAt string
 	var registeredAt string
 	var lastSeenAt string
-	if err := row.Scan(
+	if err := scanner.Scan(
 		&session.AgentID,
 		&session.InstallationID,
 		&session.SessionID,
