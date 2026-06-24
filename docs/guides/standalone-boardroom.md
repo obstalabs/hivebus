@@ -85,7 +85,7 @@ wraps the message body in signed query and answer envelopes.
 
 ## Embedding And Conformance Boundary
 
-PR #18 adds two public surfaces that keep Hivebus as the protocol owner:
+Hivebus exposes two public surfaces that keep it as the protocol owner:
 
 - `github.com/obstalabs/hivebus/embed` lets another Go process serve the Hivebus runtime
 over a caller-owned listener. The embedder owns process lifecycle and local IPC; Hivebus

@@ -242,7 +242,7 @@ func runBoardroomSay(ctx context.Context, out io.Writer, options boardroomOption
 		Body:                body,
 	}
 	if options.ttl > 0 {
-		request.TTLSeconds = int(options.ttl / time.Second)
+		request.TTLSeconds = boardroomTTLSeconds(options.ttl)
 	}
 
 	var response boardroomSendResponse
@@ -510,6 +510,20 @@ func boardroomRandomToken(random io.Reader) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(token), nil
+}
+
+func boardroomTTLSeconds(ttl time.Duration) int {
+	if ttl <= 0 {
+		return 0
+	}
+	seconds := int(ttl / time.Second)
+	if ttl%time.Second != 0 {
+		seconds++
+	}
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }
 
 func firstNonEmpty(values ...string) string {

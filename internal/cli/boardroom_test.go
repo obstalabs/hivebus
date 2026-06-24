@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBoardroomSayInboxRoundTripThroughRealRuntime(t *testing.T) {
@@ -158,6 +159,40 @@ func TestBoardroomListenReportsBusDown(t *testing.T) {
 	}
 	if result.Status != "bus_down" || !strings.Contains(result.Error, "dial failed") {
 		t.Fatalf("bus-down output = %#v", result)
+	}
+}
+
+func TestBoardroomTTLSecondsRoundsPositiveDurations(t *testing.T) {
+	tests := map[string]struct {
+		ttl  time.Duration
+		want int
+	}{
+		"zero means omitted":        {ttl: 0, want: 0},
+		"positive subsecond rounds": {ttl: 500 * time.Millisecond, want: 1},
+		"whole second stays exact":  {ttl: 2 * time.Second, want: 2},
+		"partial second rounds up":  {ttl: 2500 * time.Millisecond, want: 3},
+		"negative remains no ttl":   {ttl: -time.Second, want: 0},
+	}
+	for name, tt := range tests {
+		if got := boardroomTTLSeconds(tt.ttl); got != tt.want {
+			t.Fatalf("%s: boardroomTTLSeconds(%s) = %d, want %d", name, tt.ttl, got, tt.want)
+		}
+	}
+}
+
+func TestBoardroomSayRejectsNegativeTTL(t *testing.T) {
+	err := boardroomOptions{
+		serverURL:     "http://hivebus.test",
+		sessionID:     "sess-codex",
+		from:          "codex/hivebus",
+		to:            "oracul/hivebus",
+		operatorToken: "operator-secret",
+		workerToken:   "worker-secret",
+		leaseDuration: time.Hour,
+		ttl:           -time.Nanosecond,
+	}.validateSay()
+	if err == nil || !strings.Contains(err.Error(), "ttl must be non-negative") {
+		t.Fatalf("validateSay() error = %v, want negative ttl rejection", err)
 	}
 }
 

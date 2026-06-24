@@ -58,6 +58,10 @@ type LocalConfig struct {
 	StorePath string // WO-154: public embed config must not require internal/store imports.
 	// ArtifactRoot is the artifact directory used by the embedded runtime. Required.
 	ArtifactRoot string // WO-154: public embed config must not require internal/artifact imports.
+	// APIVerifyKey is a base64 Ed25519 public key for signed API-key auth.
+	APIVerifyKey string // WO-163: external embedders can enable auth without internal imports.
+	// AuthDisabled explicitly opts into unauthenticated local-only serving.
+	AuthDisabled bool // WO-163: unauthenticated embed mode must be visible and local-only.
 }
 
 // Server wraps the running *http.Server so the caller can shut it down without
@@ -124,11 +128,18 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) (*Server, err
 // ServeLocal opens the runtime dependencies from public paths and serves Hivebus
 // over the caller-provided listener. Shutdown closes dependencies opened here.
 func ServeLocal(ctx context.Context, listener net.Listener, cfg LocalConfig) (*Server, error) {
+	if listener == nil {
+		return nil, errors.New("embed: listener is required")
+	}
 	if strings.TrimSpace(cfg.StorePath) == "" {
 		return nil, errors.New("embed: LocalConfig.StorePath is required")
 	}
 	if strings.TrimSpace(cfg.ArtifactRoot) == "" {
 		return nil, errors.New("embed: LocalConfig.ArtifactRoot is required")
+	}
+	keys, err := localKeyStore(listener, cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	st, err := store.Open(cfg.StorePath)
@@ -141,13 +152,57 @@ func ServeLocal(ctx context.Context, listener net.Listener, cfg LocalConfig) (*S
 		return nil, fmt.Errorf("embed: open artifacts: %w", err)
 	}
 
-	srv, err := Serve(ctx, listener, Config{Store: st, Artifacts: artifacts})
+	srv, err := Serve(ctx, listener, Config{Store: st, Artifacts: artifacts, Keys: keys})
 	if err != nil {
 		_ = st.Close()
 		return nil, err
 	}
 	srv.closeFns = append(srv.closeFns, st.Close)
 	return srv, nil
+}
+
+func localKeyStore(listener net.Listener, cfg LocalConfig) (*runtime.KeyStore, error) {
+	verifyKey := strings.TrimSpace(cfg.APIVerifyKey)
+	if cfg.AuthDisabled {
+		if verifyKey != "" {
+			return nil, errors.New("embed: LocalConfig.AuthDisabled cannot be combined with LocalConfig.APIVerifyKey")
+		}
+		if !listenerIsLocalOnly(listener) {
+			return nil, errors.New("embed: AuthDisabled requires a local-only listener")
+		}
+		return nil, nil
+	}
+	if verifyKey == "" {
+		return nil, errors.New("embed: LocalConfig.APIVerifyKey is required unless AuthDisabled is true")
+	}
+	keys, err := runtime.NewSignedKeyStore(verifyKey)
+	if err != nil {
+		return nil, fmt.Errorf("embed: API verify key: %w", err)
+	}
+	return keys, nil
+}
+
+func listenerIsLocalOnly(listener net.Listener) bool {
+	if listener == nil || listener.Addr() == nil {
+		return false
+	}
+	addr := listener.Addr()
+	network := strings.ToLower(addr.Network())
+	if strings.HasPrefix(network, "unix") || network == "npipe" {
+		return true
+	}
+	if !strings.HasPrefix(network, "tcp") {
+		return false
+	}
+	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+		return tcpAddr.IP != nil && tcpAddr.IP.IsLoopback()
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Shutdown gracefully stops serving and waits for in-flight requests to drain or

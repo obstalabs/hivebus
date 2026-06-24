@@ -2,6 +2,10 @@ package embed_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +24,7 @@ func newConfig(t *testing.T, root string) embed.LocalConfig {
 	return embed.LocalConfig{
 		StorePath:    filepath.Join(root, "hivebus.db"),
 		ArtifactRoot: filepath.Join(root, "artifacts"),
+		AuthDisabled: true,
 	}
 }
 
@@ -53,6 +58,11 @@ func unixListener(t *testing.T, path string) net.Listener {
 
 func unixGet(t *testing.T, socketPath, route string) (int, error) {
 	t.Helper()
+	return unixGetWithAuth(t, socketPath, route, "")
+}
+
+func unixGetWithAuth(t *testing.T, socketPath, route string, bearer string) (int, error) {
+	t.Helper()
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -61,12 +71,43 @@ func unixGet(t *testing.T, socketPath, route string) (int, error) {
 		},
 		Timeout: 2 * time.Second,
 	}
-	resp, err := client.Get("http://unix" + route)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://unix"+route, nil)
+	if err != nil {
+		return 0, err
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode, nil
+}
+
+func signedWorkerKey(t *testing.T) (string, string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	claims := struct {
+		Subject   string `json:"sub"`
+		Role      string `json:"role"`
+		ExpiresAt int64  `json:"exp"`
+	}{
+		Subject:   "embed-worker",
+		Role:      "worker",
+		ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("Marshal(claims) error = %v", err)
+	}
+	signature := ed25519.Sign(privateKey, payload)
+	return base64.StdEncoding.EncodeToString(publicKey),
+		"hbk1." + base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signature)
 }
 
 // TestServeOverInjectedUnixListener is the static half: the runtime serves the
@@ -136,6 +177,54 @@ func TestRestartLifecycle(t *testing.T) {
 	}
 }
 
+func TestServeLocalWithVerifyKeyRequiresAuth(t *testing.T) {
+	root := shortSocketRoot(t)
+	sock := filepath.Join(root, "hb.sock")
+	verifyKey, signedKey := signedWorkerKey(t)
+	cfg := newConfig(t, root)
+	cfg.AuthDisabled = false
+	cfg.APIVerifyKey = verifyKey
+
+	ln := unixListener(t, sock)
+	srv, err := embed.ServeLocal(context.Background(), ln, cfg)
+	if err != nil {
+		t.Fatalf("ServeLocal: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = srv.Shutdown(context.Background())
+		_ = os.Remove(sock)
+	})
+
+	code, err := unixGet(t, sock, "/v0/agents/sessions/missing/inbox")
+	if err != nil {
+		t.Fatalf("unauthenticated inbox request: %v", err)
+	}
+	if code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated inbox status = %d, want 401", code)
+	}
+
+	code, err = unixGetWithAuth(t, sock, "/v0/agents/sessions/missing/inbox", signedKey)
+	if err != nil {
+		t.Fatalf("authenticated inbox request: %v", err)
+	}
+	if code != http.StatusNotFound {
+		t.Fatalf("authenticated inbox status = %d, want 404 after auth passes", code)
+	}
+}
+
+func TestServeLocalRejectsUnauthenticatedNonLocalListener(t *testing.T) {
+	root := shortSocketRoot(t)
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("Listen(tcp): %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	if _, err := embed.ServeLocal(context.Background(), ln, newConfig(t, root)); err == nil {
+		t.Fatalf("ServeLocal accepted AuthDisabled on non-local listener")
+	}
+}
+
 // TestNoSplitBrainSecondBindFails proves the single-leader guard: while one
 // embedded server holds the socket, a second bind on the same path FAILS rather
 // than silently producing two leaders / two rosters. The embed package does not
@@ -171,6 +260,10 @@ func TestServeRejectsBadConfig(t *testing.T) {
 	cases := map[string]embed.LocalConfig{
 		"no store path":    {ArtifactRoot: filepath.Join(root, "artifacts")},
 		"no artifact root": {StorePath: filepath.Join(root, "hivebus.db")},
+		"no auth config": {
+			StorePath:    filepath.Join(root, "hivebus.db"),
+			ArtifactRoot: filepath.Join(root, "artifacts"),
+		},
 	}
 	for name, cfg := range cases {
 		if _, err := embed.ServeLocal(context.Background(), ln, cfg); err == nil {
