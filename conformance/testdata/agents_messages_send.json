@@ -1,0 +1,8 @@
+{
+  "message_id": "hbm-1",
+  "sender_session_id": "nr-session-1",
+  "sender_participant_id": "nr-participant-1",
+  "target_participant_id": "nr-participant-2",
+  "body": "what work order are you on?",
+  "ttl_seconds": 600
+}
