@@ -38,10 +38,6 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 	}
 
 	deliverRequest := deliverAgentMessageRequest{SessionID: "nr-session-2"}
-	roster := rosterResponse{
-		Status:   "ok",
-		Sessions: []store.AgentSession{conformanceAgentSession()},
-	}
 
 	// WO-159: pin the runtime inbox response body, not only path addressing.
 	inbox := inboxResponse{
@@ -85,7 +81,6 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 		{conformance.RouteMessageSend, sendRequest},
 		{conformance.RouteMessageDeliver, deliverRequest},
 		{conformance.RouteInbox, inbox},
-		{conformance.RouteRoster, roster},
 	}
 
 	for _, c := range checks {

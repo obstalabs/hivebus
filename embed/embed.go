@@ -3,15 +3,15 @@
 //
 // WO-150: a caller (for example a host process that wants Hivebus over local IPC)
 // provides its own net.Listener — a Unix socket, an abstract socket, or a
-// loopback TCP listener — and Serve runs the existing /v0 routes over it. The
-// caller owns the listener and the returned *http.Server's shutdown; Hivebus does
+// loopback TCP listener — and ServeLocal runs the existing /v0 routes over it. The
+// caller owns the listener and the returned Server's shutdown; Hivebus does
 // not start a TCP daemon, install signal handlers, or block.
 //
 // This package is the public seam on purpose: Go's internal/ rule makes
 // internal/runtime unimportable across modules, so an external embedder (a
 // separate module) must consume this package, not internal/runtime. Keep the
-// exported surface minimal — LocalConfig, Config, ServeLocal, Serve, and Server
-// — so the public API commitment stays small.
+// exported surface minimal — LocalConfig, ServeLocal, and Server — so the public
+// API commitment stays small.
 //
 // Boundary: this package imports only the open-core runtime. It pulls in no
 // private governance, no live-session concepts, and nothing vendor-specific.
@@ -36,10 +36,9 @@ import (
 // and standalone serving share the same slow-loris protection.
 const readHeaderTimeout = 5 * time.Second
 
-// Config is the dependency set Serve needs. The caller opens and owns the store
-// and artifact directories; Serve neither creates nor closes them, so a host
-// process can keep them across a serve/restart cycle.
-type Config struct {
+// config is the dependency set serve needs. It stays internal because it carries
+// internal store/runtime types; external embedders use LocalConfig instead.
+type config struct {
 	// Store is the opened append-only event/agent store. Required.
 	Store *store.Store
 	// Artifacts is the opened artifact store. Required.
@@ -80,8 +79,9 @@ type Server struct {
 	closeErr  error
 }
 
-// Serve builds the Hivebus v0 handler and serves it over the caller-provided
-// listener in a background goroutine. It returns immediately with a *Server the
+// WO-169: keep the low-level runtime entrypoint internal to the guarded public surface.
+// serve builds the Hivebus v0 handler and serves it over the caller-provided
+// listener in a background goroutine. It returns immediately with a Server the
 // caller drives; it never blocks and never installs signal handlers.
 //
 // Lifecycle contract (WO-150):
@@ -96,7 +96,7 @@ type Server struct {
 //     store on the same machine is the caller's responsibility to prevent; the
 //     single bound socket (a second bind fails) and single-writer SQLite are the
 //     structural guards against split-brain, not logic in this package.
-func Serve(ctx context.Context, listener net.Listener, cfg Config) (*Server, error) {
+func serve(ctx context.Context, listener net.Listener, cfg config) (*Server, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -104,10 +104,10 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) (*Server, err
 		return nil, errors.New("embed: listener is required")
 	}
 	if cfg.Store == nil {
-		return nil, errors.New("embed: Config.Store is required")
+		return nil, errors.New("embed: config.Store is required")
 	}
 	if cfg.Artifacts == nil {
-		return nil, errors.New("embed: Config.Artifacts is required")
+		return nil, errors.New("embed: config.Artifacts is required")
 	}
 
 	handler := runtime.NewHandlerWithOptions(cfg.Store, cfg.Artifacts, cfg.Keys, cfg.Options)
@@ -127,6 +127,9 @@ func Serve(ctx context.Context, listener net.Listener, cfg Config) (*Server, err
 
 // ServeLocal opens the runtime dependencies from public paths and serves Hivebus
 // over the caller-provided listener. Shutdown closes dependencies opened here.
+// When AuthDisabled is true, the caller must provide an honest local-only
+// listener; this package rejects non-local TCP listeners as a guardrail, but the
+// embedder still owns the listener it passes in.
 func ServeLocal(ctx context.Context, listener net.Listener, cfg LocalConfig) (*Server, error) {
 	if listener == nil {
 		return nil, errors.New("embed: listener is required")
@@ -152,7 +155,7 @@ func ServeLocal(ctx context.Context, listener net.Listener, cfg LocalConfig) (*S
 		return nil, fmt.Errorf("embed: open artifacts: %w", err)
 	}
 
-	srv, err := Serve(ctx, listener, Config{Store: st, Artifacts: artifacts, Keys: keys})
+	srv, err := serve(ctx, listener, config{Store: st, Artifacts: artifacts, Keys: keys})
 	if err != nil {
 		_ = st.Close()
 		return nil, err

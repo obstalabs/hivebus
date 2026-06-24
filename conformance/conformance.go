@@ -53,7 +53,6 @@ const (
 	RouteMessageSend      Route = "agents.messages.send"
 	RouteMessageDeliver   Route = "agents.messages.deliver"
 	RouteInbox            Route = "agents.sessions.inbox"
-	RouteRoster           Route = "agents.sessions.roster"
 )
 
 // Routes returns every covered route in a stable order.
@@ -77,7 +76,6 @@ var goldenIndex = map[Route]string{
 	RouteMessageSend:      "testdata/agents_messages_send.json",
 	RouteMessageDeliver:   "testdata/agents_messages_deliver.json",
 	RouteInbox:            "testdata/agents_sessions_inbox.json",
-	RouteRoster:           "testdata/agents_sessions_roster.json",
 }
 
 // Golden returns the canonical wire bytes for a route (indented JSON).

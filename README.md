@@ -22,9 +22,9 @@ A few names above refer to the wider stack this composes with — all optional, 
 
 - **`nullbot`** — an intake collector that opens a thread with evidence; the open-core intake surface lives here.
 - **`workledger`** — the command-line client for [Hiveram](https://hiveram.com), our commercial execution ledger. Hivebus drafts work orders *for* it; Hiveram records and routes the work. Hivebus itself never needs it to run — the bridge is optional and the protocol is open.
-- **[NeuroRouter](https://neurorouter.dev)** — the commercial live-session bridge: it lets a *running* agent session answer from its own warm context, the out-of-tree layer the boundary charter draws the line at.
+- **[NeuroRouter Pro](https://neurorouter.dev)** — the commercial live-session bridge: it lets a *running* agent session answer from its own warm context, the out-of-tree layer the boundary charter draws the line at.
 
-That is the honest shape: hivebus is the free, MIT, self-hostable channel; the paid products ([Hiveram](https://hiveram.com), [NeuroRouter](https://neurorouter.dev), [Bulwark](https://obstalabs.dev/bulwark)) sit *above* the bus and compose with it through the open protocol. They cannot make the channel non-open.
+That is the honest shape: hivebus is the free, MIT, self-hostable channel; the paid products ([Hiveram](https://hiveram.com), [NeuroRouter Pro](https://neurorouter.dev), [Bulwark](https://obstalabs.dev/bulwark)) sit *above* the bus and compose with it through the open protocol. They cannot make the channel non-open.
 
 ## Licensing Model
 
@@ -129,19 +129,19 @@ The first keyless ask pins the answerer's key (SSH `known_hosts` model). For the
 variants, multiple repos, key pinning, and cross-machine asks over SSH, see the
 [local](docs/guides/local-ask-answer.md) and [remote](docs/guides/remote-ask-over-ssh.md)
 runbooks. Setting this up by hand is the open-core path; a live-session bridge
-([NeuroRouter](https://neurorouter.dev)) wires the agents together for you.
+([NeuroRouter Pro](https://neurorouter.dev)) wires the agents together for you.
 
 ### Standalone Boardroom
 
 `hivebus` can also act as the small boardroom binary for processes that do not run
-under NeuroRouter. Start the runtime, have one participant listen, and let another
+under an orchestrator such as NeuroRouter Pro. Start the runtime, have one participant listen, and let another
 participant say into that inbox:
 
 ```bash
 # terminal 1 -- local bus
 hivebus serve --auth-disabled --listen 127.0.0.1:7097 --db /tmp/hivebus-boardroom.db
 
-# terminal 2 -- Codex or any non-NR process registers and listens
+# terminal 2 -- Codex or any non-orchestrated process registers and listens
 hivebus listen --server http://127.0.0.1:7097 --insecure \
   --session-id codex-1 --participant codex/hivebus --ack
 
@@ -247,7 +247,7 @@ session answer from its own warm context** ("what am I actually working on? whic
 did I pick?"), and bridging the running sessions of vendor agents into the bus -- is
 live-session integration, which lives out of tree under the
 [boundary charter](docs/BOUNDARY.md). The open bus makes agents talk; connecting their
-live working sessions is the commercial layer ([NeuroRouter](https://neurorouter.dev) /
+live working sessions is the commercial layer ([NeuroRouter Pro](https://neurorouter.dev) /
 [Obsta Labs](https://obstalabs.dev)).
 
 Cross-machine: a dispatched agent reports back. The most demanding case is the one where

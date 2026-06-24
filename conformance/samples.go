@@ -41,7 +41,7 @@ type DeliverMessageRequest struct {
 	SessionID string `json:"session_id"`
 }
 
-// AgentSession is the public roster session shape (GET /v0/agents/sessions).
+// AgentSession is the public session shape embedded in inbox responses.
 type AgentSession struct {
 	AgentID           string   `json:"agent_id"`
 	InstallationID    string   `json:"installation_id"`
@@ -57,12 +57,6 @@ type AgentSession struct {
 	ReplacesSessionID string   `json:"replaces_session_id,omitempty"`
 	RegisteredAt      string   `json:"registered_at"`
 	LastSeenAt        string   `json:"last_seen_at"`
-}
-
-// RosterResponse is the GET /v0/agents/sessions response body.
-type RosterResponse struct {
-	Status   string         `json:"status"`
-	Sessions []AgentSession `json:"sessions"`
 }
 
 // InboxResponse is the GET /v0/agents/sessions/{sessionID}/inbox response body
@@ -170,11 +164,6 @@ func Sample(route Route) any {
 					},
 				},
 			},
-		}
-	case RouteRoster:
-		return RosterResponse{
-			Status:   "ok",
-			Sessions: []AgentSession{sampleAgentSession()},
 		}
 	default:
 		return nil

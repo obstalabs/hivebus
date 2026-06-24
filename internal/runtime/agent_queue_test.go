@@ -199,36 +199,6 @@ func TestAgentMessagingAcceptsSignedAskQueryBodyOverHTTP(t *testing.T) {
 	}
 }
 
-func TestAgentRosterOverHTTP(t *testing.T) {
-	t.Helper()
-
-	st := openTestStore(t)
-	keys := mustTestKeyStore(t)
-	handler := NewHandler(st, openTestArtifactStore(t), keys)
-
-	mustRegisterAgentSession(t, handler, "sess_nullbot_001", "agent.field.nullbot")
-	mustRegisterAgentSession(t, handler, "sess_architect_001", "architect/agent")
-
-	req := httptest.NewRequest(http.MethodGet, "/v0/agents/sessions?prefix=agent.field.", nil)
-	req.Header.Set("Authorization", "Bearer worker-secret")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("roster status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-
-	var roster rosterResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &roster); err != nil {
-		t.Fatalf("Unmarshal(roster) error = %v", err)
-	}
-	if roster.Status != "ok" {
-		t.Fatalf("roster status field = %q, want ok", roster.Status)
-	}
-	if len(roster.Sessions) != 1 || roster.Sessions[0].ParticipantID != "agent.field.nullbot" {
-		t.Fatalf("roster sessions = %#v, want only agent.field.nullbot", roster.Sessions)
-	}
-}
-
 func TestAgentMessagingRequiresMatchingQueueOnDeliver(t *testing.T) {
 	t.Helper()
 

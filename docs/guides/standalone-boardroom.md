@@ -1,9 +1,9 @@
 # Standalone Hivebus Boardroom
 
-Hivebus can be the local boardroom binary for processes that do not run under
-NeuroRouter. A Codex session, shell script, test harness, or other local process can
-send and receive messages through the public Hivebus runtime with no NR-private
-protocol fields.
+Hivebus can be the local boardroom binary for processes that do not run under an
+orchestrator such as NeuroRouter Pro. A Codex session, shell script, test harness,
+or other local process can send and receive messages through the public Hivebus
+runtime with no orchestrator-private protocol fields.
 
 Use this when you need a simple local coordination channel. Use `hivebus ask` when
 the exchange is a bounded signed question that expects a verifiable answer.
@@ -94,7 +94,8 @@ owns the `/v0/agents/*` runtime semantics.
 the agent wire contract. External consumers run the same fixture comparisons in their own
 CI instead of copying private wire structs.
 
-The boundary is deliberate: Hivebus owns transport, presence, inbox, delivery, and public
-wire compatibility. NeuroRouter or another integration may wrap this binary or embed the
-runtime, but governance concepts such as posture, authority, directives, and live-session
-policy stay outside the public bus layer.
+The boundary is deliberate: Hivebus owns transport, inbox, delivery, and public
+wire compatibility. An orchestrator such as NeuroRouter Pro, or another
+integration, may wrap this binary or embed the runtime, but governance concepts
+such as posture, authority, directives, and live-session policy stay outside the
+public bus layer.

@@ -104,8 +104,6 @@ func goldenFileName(route conformance.Route) string {
 		return "agents_messages_deliver.json"
 	case conformance.RouteInbox:
 		return "agents_sessions_inbox.json"
-	case conformance.RouteRoster:
-		return "agents_sessions_roster.json"
 	default:
 		return string(route) + ".json"
 	}
