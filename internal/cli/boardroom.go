@@ -89,10 +89,11 @@ type boardroomInboxOutput struct {
 }
 
 type boardroomListenOutput struct {
-	Status   string                   `json:"status"`
-	Session  boardroomAgentSession    `json:"session,omitempty"`
-	Messages []boardroomMessageRecord `json:"messages,omitempty"`
-	Error    string                   `json:"error,omitempty"`
+	Status    string                   `json:"status"`
+	Session   boardroomAgentSession    `json:"session,omitempty"`
+	Messages  []boardroomMessageRecord `json:"messages,omitempty"`
+	Delivered []string                 `json:"delivered,omitempty"` // WO-172: mirror inbox --ack receipt reporting.
+	Error     string                   `json:"error,omitempty"`
 }
 
 type boardroomAgentSession struct {
@@ -287,11 +288,11 @@ func runBoardroomListen(ctx context.Context, out io.Writer, options boardroomOpt
 			return err
 		}
 		if len(response.Messages) > 0 {
-			_ = delivered
 			return writeJSON(out, boardroomListenOutput{
-				Status:   "message",
-				Session:  response.Session,
-				Messages: response.Messages,
+				Status:    "message",
+				Session:   response.Session,
+				Messages:  response.Messages,
+				Delivered: delivered,
 			})
 		}
 		if !boardroomNow().Before(deadline) || options.timeout <= 0 || options.pollInterval <= 0 {

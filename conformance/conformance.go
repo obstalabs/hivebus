@@ -2,9 +2,9 @@
 // Hivebus /v0/agents protocol. It exists so that Hivebus and any external
 // consumer (for example NeuroRouter Pro) cannot silently DRIFT: both vendor or
 // import this package and run Compare against their own marshaled payloads in
-// their own CI. If either side changes a wire field without an intentional,
-// declared version bump, the golden fixtures fail the build on the side that
-// diverged.
+// their own CI. If either side changes a sampled wire field without an
+// intentional, declared version bump, the golden fixtures fail the build on the
+// side that diverged.
 //
 // Why this package is PUBLIC (not internal/, not a testdata directory): Go's
 // internal/ rule makes internal packages unimportable across modules, and a
@@ -16,7 +16,8 @@
 // FIELD-CHANGE DISCIPLINE (the version-lag rule lives here, with the code it
 // governs, so it travels when a consumer vendors this package):
 //   - Adding an OPTIONAL field (json:",omitempty") is a PATCH: existing golden
-//     fixtures still match; regenerate to add coverage.
+//     fixtures still match when the field is omitted. Regenerate to add coverage
+//     if the field should be pinned by the drift gate.
 //   - Renaming, removing, retyping, or making-required any wire field is a
 //     BREAKING change and MUST bump the MINOR version (pre-1.0) — and during the
 //     change window both versions must be representable.

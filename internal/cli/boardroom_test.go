@@ -17,8 +17,8 @@ func TestBoardroomSayInboxRoundTripThroughRealRuntime(t *testing.T) {
 		workerToken   = "worker-secret"
 		senderSession = "sess-codex"
 		sender        = "codex/hivebus"
-		targetSession = "sess-oracul"
-		target        = "oracul/hivebus"
+		targetSession = "sess-peer"
+		target        = "peer/hivebus"
 		messageID     = "hbm-wo153"
 	)
 
@@ -39,7 +39,7 @@ func TestBoardroomSayInboxRoundTripThroughRealRuntime(t *testing.T) {
 		"--operator-token", operatorToken,
 		"--worker-token", workerToken,
 	})
-	sayCmd.SetIn(strings.NewReader("hello from codex without NR\n"))
+	sayCmd.SetIn(strings.NewReader("hello from codex over boardroom\n"))
 	var sayOut bytes.Buffer
 	sayCmd.SetOut(&sayOut)
 	if err := sayCmd.Execute(); err != nil {
@@ -72,7 +72,7 @@ func TestBoardroomSayInboxRoundTripThroughRealRuntime(t *testing.T) {
 	if len(inbox.Messages) != 1 {
 		t.Fatalf("inbox messages = %d, want 1", len(inbox.Messages))
 	}
-	if got := inbox.Messages[0].Message.Body; got != "hello from codex without NR" {
+	if got := inbox.Messages[0].Message.Body; got != "hello from codex over boardroom" {
 		t.Fatalf("message body = %q", got)
 	}
 	if len(inbox.Delivered) != 1 || inbox.Delivered[0] != messageID {
@@ -96,6 +96,67 @@ func TestBoardroomSayInboxRoundTripThroughRealRuntime(t *testing.T) {
 	}
 	if len(empty.Messages) != 0 {
 		t.Fatalf("second inbox messages = %#v, want none after ack", empty.Messages)
+	}
+}
+
+func TestBoardroomListenAckReportsDeliveredIDs(t *testing.T) {
+	const (
+		serverURL     = "http://hivebus.test"
+		operatorToken = "operator-secret"
+		workerToken   = "worker-secret"
+		senderSession = "sess-codex-listen"
+		sender        = "codex/hivebus"
+		targetSession = "sess-peer-listen"
+		target        = "peer/hivebus"
+		messageID     = "hbm-wo172"
+	)
+
+	client := handlerBackedClient(newRuntimeAskHandler(t))
+	oldClient := boardroomHTTPClient
+	boardroomHTTPClient = client
+	t.Cleanup(func() { boardroomHTTPClient = oldClient })
+
+	registerRuntimeAskSession(t, client, serverURL, workerToken, targetSession, target)
+
+	sayCmd := newSayCommand()
+	sayCmd.SetArgs([]string{
+		"--server", serverURL,
+		"--from", sender,
+		"--to", target,
+		"--session-id", senderSession,
+		"--message-id", messageID,
+		"--operator-token", operatorToken,
+		"--worker-token", workerToken,
+	})
+	sayCmd.SetIn(strings.NewReader("ack this boardroom message\n"))
+	var sayOut bytes.Buffer
+	sayCmd.SetOut(&sayOut)
+	if err := sayCmd.Execute(); err != nil {
+		t.Fatalf("say command error = %v", err)
+	}
+
+	listenCmd := newListenCommand()
+	listenCmd.SetArgs([]string{
+		"--server", serverURL,
+		"--session-id", targetSession,
+		"--worker-token", workerToken,
+		"--ack",
+		"--timeout", "0s",
+	})
+	var listenOut bytes.Buffer
+	listenCmd.SetOut(&listenOut)
+	if err := listenCmd.Execute(); err != nil {
+		t.Fatalf("listen command error = %v", err)
+	}
+	var listen boardroomListenOutput
+	if err := json.Unmarshal(listenOut.Bytes(), &listen); err != nil {
+		t.Fatalf("Unmarshal(listen output) error = %v", err)
+	}
+	if listen.Status != "message" || len(listen.Messages) != 1 {
+		t.Fatalf("listen output = %#v, want one message", listen)
+	}
+	if len(listen.Delivered) != 1 || listen.Delivered[0] != messageID {
+		t.Fatalf("listen delivered = %#v, want %q", listen.Delivered, messageID)
 	}
 }
 
@@ -185,7 +246,7 @@ func TestBoardroomSayRejectsNegativeTTL(t *testing.T) {
 		serverURL:     "http://hivebus.test",
 		sessionID:     "sess-codex",
 		from:          "codex/hivebus",
-		to:            "oracul/hivebus",
+		to:            "peer/hivebus",
 		operatorToken: "operator-secret",
 		workerToken:   "worker-secret",
 		leaseDuration: time.Hour,
