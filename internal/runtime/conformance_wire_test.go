@@ -59,23 +59,29 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 		State:                       model.DeliveryReceiptQueued,
 	}
 
-	// WO-159: pin the runtime inbox response body, not only path addressing.
+	// WO-179: pin handle-resolution provenance in the runtime inbox response body.
 	inbox := inboxResponse{
 		Status:  "ok",
 		Session: conformanceAgentSession(),
 		Messages: []store.AgentMessageRecord{
 			{
 				Message: store.AgentMessage{
-					MessageID:             "hbm-1",
-					SenderSessionID:       "nr-session-2",
-					SenderParticipantID:   "nr-participant-2",
-					TargetParticipantID:   "nr-participant-1",
-					TargetAgentID:         "claude/hivebus",
-					TargetAnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
-					Body:                  "what work order are you on?",
-					CreatedAt:             time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC),
-					ExpiresAt:             time.Date(2026, 1, 1, 0, 10, 30, 0, time.UTC),
-					State:                 model.DeliveryReceiptQueued,
+					MessageID:                   "hbm-1",
+					SenderSessionID:             "nr-session-2",
+					SenderParticipantID:         "nr-participant-2",
+					TargetParticipantID:         "nr-participant-1",
+					TargetAgentID:               "claude/hivebus",
+					TargetAnswerPublicKey:       "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+					TargetHandle:                "architect",
+					TargetRepository:            "neurorouter-pro",
+					ResolvedTargetParticipantID: "nr-participant-1",
+					ResolvedTargetSessionID:     "nr-session-1",
+					ResolutionMode:              store.ResolutionModeServerSideHandle,
+					IgnoredTargetParticipantID:  "nr-participant-2",
+					Body:                        "what work order are you on?",
+					CreatedAt:                   time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC),
+					ExpiresAt:                   time.Date(2026, 1, 1, 0, 10, 30, 0, time.UTC),
+					State:                       model.DeliveryReceiptQueued,
 				},
 				Events: []store.AgentMessageEvent{
 					{
@@ -144,7 +150,9 @@ func TestRuntimeInboxHTTPResponseMatchesConformanceContract(t *testing.T) {
 		MessageID:           "hbm-1",
 		SenderSessionID:     "nr-session-2",
 		SenderParticipantID: "nr-participant-2",
-		TargetParticipantID: "nr-participant-1",
+		TargetParticipantID: "nr-participant-2", // WO-179: stale hint ignored by target_handle resolution.
+		TargetHandle:        "architect",
+		Repository:          "neurorouter-pro",
 		Body:                "what work order are you on?",
 		TTLSeconds:          600,
 	})
@@ -181,10 +189,7 @@ func conformanceAuthHeader(role Role) string {
 }
 
 func conformanceAgentSessionPayload() model.AgentSessionPayload {
-	payload := conformanceInboxAgentSessionPayload()
-	payload.Handle = "architect"           // WO-177: public register/heartbeat route key.
-	payload.Repository = "neurorouter-pro" // WO-177: optional route-key scope.
-	return payload
+	return conformanceInboxAgentSessionPayload()
 }
 
 func conformanceInboxAgentSessionPayload() model.AgentSessionPayload {
@@ -196,6 +201,8 @@ func conformanceInboxAgentSessionPayload() model.AgentSessionPayload {
 		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
 		Roles:           []string{"worker"},
 		AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+		Handle:          "architect",       // WO-177/WO-179: public route key pinned in inbox.
+		Repository:      "neurorouter-pro", // WO-177/WO-179: route-key scope pinned in inbox.
 		DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
 		SessionStatus:   model.AgentSessionStatus("online"),
 		LeaseExpiresAt:  "2026-01-01T00:02:00Z",
@@ -212,6 +219,8 @@ func conformanceAgentSession() store.AgentSession {
 		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
 		Roles:           []string{"worker"},
 		AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+		Handle:          "architect",       // WO-179: inbox session route key.
+		Repository:      "neurorouter-pro", // WO-179: inbox session route-key scope.
 		DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
 		SessionStatus:   model.AgentSessionStatus("online"),
 		LeaseExpiresAt:  time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC),

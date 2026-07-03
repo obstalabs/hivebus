@@ -78,6 +78,8 @@ type AgentSession struct {
 	Capabilities      []string `json:"capabilities,omitempty"`
 	Roles             []string `json:"roles,omitempty"`
 	AnswerPublicKey   string   `json:"answer_public_key,omitempty"`
+	Handle            string   `json:"handle,omitempty"`     // WO-179: inbox session route key.
+	Repository        string   `json:"repository,omitempty"` // WO-179: inbox session route-key scope.
 	DeliveryMode      string   `json:"delivery_mode"`
 	SessionStatus     string   `json:"session_status"`
 	LeaseExpiresAt    string   `json:"lease_expires_at"`
@@ -103,20 +105,26 @@ type MessageEntry struct {
 
 // AgentMessage is the public queued-message shape returned in inbox responses.
 type AgentMessage struct {
-	MessageID             string `json:"message_id"`
-	SenderSessionID       string `json:"sender_session_id"`
-	SenderParticipantID   string `json:"sender_participant_id"`
-	TargetParticipantID   string `json:"target_participant_id"`
-	TargetAgentID         string `json:"target_agent_id,omitempty"`
-	TargetAnswerPublicKey string `json:"target_answer_public_key,omitempty"`
-	ChannelID             string `json:"channel_id,omitempty"`
-	Body                  string `json:"body"`
-	CreatedAt             string `json:"created_at"`
-	ExpiresAt             string `json:"expires_at"`
-	State                 string `json:"state"`
-	DeliveredSessionID    string `json:"delivered_session_id,omitempty"`
-	DeliveredAt           string `json:"delivered_at,omitempty"`
-	Reason                string `json:"reason,omitempty"`
+	MessageID                   string `json:"message_id"`
+	SenderSessionID             string `json:"sender_session_id"`
+	SenderParticipantID         string `json:"sender_participant_id"`
+	TargetParticipantID         string `json:"target_participant_id"`
+	TargetAgentID               string `json:"target_agent_id,omitempty"`
+	TargetAnswerPublicKey       string `json:"target_answer_public_key,omitempty"`
+	TargetHandle                string `json:"target_handle,omitempty"`                  // WO-179: handle used for inbox routing.
+	TargetRepository            string `json:"target_repository,omitempty"`              // WO-179: repository scope used for inbox routing.
+	ResolvedTargetParticipantID string `json:"resolved_target_participant_id,omitempty"` // WO-179: live participant selected by the broker.
+	ResolvedTargetSessionID     string `json:"resolved_target_session_id,omitempty"`     // WO-179: live session selected by the broker.
+	ResolutionMode              string `json:"resolution_mode,omitempty"`                // WO-179: server-side resolution mode.
+	IgnoredTargetParticipantID  string `json:"ignored_target_participant_id,omitempty"`  // WO-179: stale client hint ignored by resolution.
+	ChannelID                   string `json:"channel_id,omitempty"`
+	Body                        string `json:"body"`
+	CreatedAt                   string `json:"created_at"`
+	ExpiresAt                   string `json:"expires_at"`
+	State                       string `json:"state"`
+	DeliveredSessionID          string `json:"delivered_session_id,omitempty"`
+	DeliveredAt                 string `json:"delivered_at,omitempty"`
+	Reason                      string `json:"reason,omitempty"`
 }
 
 // MessageEvent is one delivery-state transition in an inbox message history.
@@ -189,17 +197,23 @@ func Sample(route Route) any {
 			Messages: []MessageEntry{
 				{
 					Message: AgentMessage{
-						MessageID:             "hbm-1",
-						SenderSessionID:       "nr-session-2",
-						SenderParticipantID:   "nr-participant-2",
-						TargetParticipantID:   "nr-participant-1",
-						TargetAgentID:         "claude/hivebus",
-						TargetAnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
-						Body:                  "what work order are you on?",
-						CreatedAt:             "2026-01-01T00:00:30Z",
-						ExpiresAt:             "2026-01-01T00:10:30Z",
-						State:                 "queued",
-						DeliveredAt:           "0001-01-01T00:00:00Z",
+						MessageID:                   "hbm-1",
+						SenderSessionID:             "nr-session-2",
+						SenderParticipantID:         "nr-participant-2",
+						TargetParticipantID:         "nr-participant-1",
+						TargetAgentID:               "claude/hivebus",
+						TargetAnswerPublicKey:       "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+						TargetHandle:                "architect",
+						TargetRepository:            "neurorouter-pro",
+						ResolvedTargetParticipantID: "nr-participant-1",
+						ResolvedTargetSessionID:     "nr-session-1",
+						ResolutionMode:              "server_side_handle",
+						IgnoredTargetParticipantID:  "nr-participant-2",
+						Body:                        "what work order are you on?",
+						CreatedAt:                   "2026-01-01T00:00:30Z",
+						ExpiresAt:                   "2026-01-01T00:10:30Z",
+						State:                       "queued",
+						DeliveredAt:                 "0001-01-01T00:00:00Z",
 					},
 					Events: []MessageEvent{
 						{
@@ -229,6 +243,8 @@ func sampleAgentSession() AgentSession {
 		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
 		Roles:           []string{"worker"},
 		AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+		Handle:          "architect",
+		Repository:      "neurorouter-pro",
 		DeliveryMode:    "queued_delivery",
 		SessionStatus:   "online",
 		LeaseExpiresAt:  "2026-01-01T00:02:00Z",
