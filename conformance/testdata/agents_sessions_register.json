@@ -11,6 +11,8 @@
     "worker"
   ],
   "answer_public_key": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+  "handle": "architect",
+  "repository": "neurorouter-pro",
   "delivery_mode": "queued_delivery",
   "session_status": "online",
   "lease_expires_at": "2026-01-01T00:02:00Z",

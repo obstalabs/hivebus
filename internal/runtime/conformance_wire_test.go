@@ -39,6 +39,26 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 
 	deliverRequest := deliverAgentMessageRequest{SessionID: "nr-session-2"}
 
+	// WO-174: pin the resolved-by-handle message shape (ghost-kill anchor). The
+	// REAL store.AgentMessage with resolution provenance must serialize exactly
+	// like conformance.Sample(RouteMessageSendHandle).
+	sentByHandle := store.AgentMessage{
+		MessageID:                   "hbm-2",
+		SenderSessionID:             "nr-session-1",
+		SenderParticipantID:         "nr-participant-1",
+		TargetParticipantID:         "nr-participant-2",
+		TargetHandle:                "architect",
+		TargetRepository:            "neurorouter-pro",
+		ResolvedTargetParticipantID: "nr-participant-2",
+		ResolvedTargetSessionID:     "nr-session-2",
+		ResolutionMode:              store.ResolutionModeServerSideHandle,
+		IgnoredTargetParticipantID:  "nr-participant-1",
+		Body:                        "which work order are you on?",
+		CreatedAt:                   time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC),
+		ExpiresAt:                   time.Date(2026, 1, 1, 0, 10, 30, 0, time.UTC),
+		State:                       model.DeliveryReceiptQueued,
+	}
+
 	// WO-159: pin the runtime inbox response body, not only path addressing.
 	inbox := inboxResponse{
 		Status:  "ok",
@@ -79,6 +99,7 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 		{conformance.RouteSessionRegister, sessionPayload},
 		{conformance.RouteSessionHeartbeat, sessionPayload},
 		{conformance.RouteMessageSend, sendRequest},
+		{conformance.RouteMessageSendHandle, sentByHandle},
 		{conformance.RouteMessageDeliver, deliverRequest},
 		{conformance.RouteInbox, inbox},
 	}
@@ -113,7 +134,7 @@ func TestRuntimeInboxHTTPResponseMatchesConformanceContract(t *testing.T) {
 		return rec
 	}
 
-	registerRec := postJSON(http.MethodPost, "/v0/agents/sessions/register", RoleWorker, conformanceAgentSessionPayload())
+	registerRec := postJSON(http.MethodPost, "/v0/agents/sessions/register", RoleWorker, conformanceInboxAgentSessionPayload())
 	if registerRec.Code != http.StatusCreated {
 		t.Fatalf("register status = %d, body = %s", registerRec.Code, registerRec.Body.String())
 	}
@@ -133,7 +154,7 @@ func TestRuntimeInboxHTTPResponseMatchesConformanceContract(t *testing.T) {
 
 	// WO-161: the real inbox route must match the public fixture after store reload.
 	now = time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC)
-	heartbeatRec := postJSON(http.MethodPost, "/v0/agents/sessions/heartbeat", RoleWorker, conformanceAgentSessionPayload())
+	heartbeatRec := postJSON(http.MethodPost, "/v0/agents/sessions/heartbeat", RoleWorker, conformanceInboxAgentSessionPayload())
 	if heartbeatRec.Code != http.StatusOK {
 		t.Fatalf("heartbeat status = %d, body = %s", heartbeatRec.Code, heartbeatRec.Body.String())
 	}
@@ -160,6 +181,13 @@ func conformanceAuthHeader(role Role) string {
 }
 
 func conformanceAgentSessionPayload() model.AgentSessionPayload {
+	payload := conformanceInboxAgentSessionPayload()
+	payload.Handle = "architect"           // WO-177: public register/heartbeat route key.
+	payload.Repository = "neurorouter-pro" // WO-177: optional route-key scope.
+	return payload
+}
+
+func conformanceInboxAgentSessionPayload() model.AgentSessionPayload {
 	return model.AgentSessionPayload{
 		AgentID:         "claude/hivebus",
 		InstallationID:  "install-1",

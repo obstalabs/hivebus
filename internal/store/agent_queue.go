@@ -13,12 +13,41 @@ import (
 
 const defaultInboxLimit = 32
 
+// ResolutionModeServerSideHandle marks a message whose target participant was
+// resolved server-side from a stable handle at send time. WO-174.
+const ResolutionModeServerSideHandle = "server_side_handle"
+
+// WO-175: message provenance columns that must survive store reloads.
+var agentMessageResolutionColumns = []string{
+	"target_handle",
+	"target_repository",
+	"resolved_target_participant_id",
+	"resolved_target_session_id",
+	"resolution_mode",
+	"ignored_target_participant_id",
+}
+
 var (
 	ErrAgentSessionNotFound   = errors.New("agent session not found")
 	ErrAgentMessageNotFound   = errors.New("agent message not found")
 	ErrAgentMessageFinalized  = errors.New("agent message is already finalized")
 	ErrAgentMessageWrongQueue = errors.New("agent message does not belong to the requesting session")
+
+	// WO-174: server-side handle-resolution outcomes. The runtime maps these to
+	// the wire error codes target_handle_not_found (404), target_handle_not_live
+	// and target_handle_ambiguous (409).
+	ErrTargetHandleNotFound  = errors.New("target_handle_not_found")
+	ErrTargetHandleNotLive   = errors.New("target_handle_not_live")
+	ErrTargetHandleAmbiguous = errors.New("target_handle_ambiguous")
 )
+
+// ResolvedTargetHandle is the outcome of resolving a stable handle to the
+// freshest-live participant. WO-174.
+type ResolvedTargetHandle struct {
+	ParticipantID string
+	SessionID     string
+	StaleMatches  int
+}
 
 type AgentSession struct {
 	AgentID           string                   `json:"agent_id"`
@@ -28,6 +57,8 @@ type AgentSession struct {
 	Capabilities      []string                 `json:"capabilities,omitempty"`
 	Roles             []string                 `json:"roles,omitempty"`
 	AnswerPublicKey   string                   `json:"answer_public_key,omitempty"` // WO-122: session discovery key; trust stays with askers.
+	Handle            string                   `json:"handle,omitempty"`            // WO-174: stable logical route key.
+	Repository        string                   `json:"repository,omitempty"`        // WO-174: optional scope for role handles.
 	DeliveryMode      model.AgentDeliveryMode  `json:"delivery_mode"`
 	SessionStatus     model.AgentSessionStatus `json:"session_status"`
 	LeaseExpiresAt    time.Time                `json:"lease_expires_at"`
@@ -42,26 +73,41 @@ type AgentMessageInput struct {
 	SenderSessionID     string `json:"sender_session_id"`
 	SenderParticipantID string `json:"sender_participant_id"`
 	TargetParticipantID string `json:"target_participant_id"`
-	ChannelID           string `json:"channel_id,omitempty"`
-	Body                string `json:"body"`
-	TTL                 time.Duration
+	TargetHandle        string `json:"target_handle,omitempty"` // WO-174: stable route key; resolved server-side to a live participant.
+	Repository          string `json:"repository,omitempty"`    // WO-174: optional scope for role handles.
+	// WO-175: server-side resolution provenance is persisted with the queued message.
+	ResolvedTargetParticipantID string `json:"resolved_target_participant_id,omitempty"`
+	ResolvedTargetSessionID     string `json:"resolved_target_session_id,omitempty"`
+	ResolutionMode              string `json:"resolution_mode,omitempty"`
+	IgnoredTargetParticipantID  string `json:"ignored_target_participant_id,omitempty"`
+	ChannelID                   string `json:"channel_id,omitempty"`
+	Body                        string `json:"body"`
+	TTL                         time.Duration
 }
 
 type AgentMessage struct {
-	MessageID             string                     `json:"message_id"`
-	SenderSessionID       string                     `json:"sender_session_id"`
-	SenderParticipantID   string                     `json:"sender_participant_id"`
-	TargetParticipantID   string                     `json:"target_participant_id"`
-	TargetAgentID         string                     `json:"target_agent_id,omitempty"`
-	TargetAnswerPublicKey string                     `json:"target_answer_public_key,omitempty"` // WO-122: send response exposes the target session's declared key.
-	ChannelID             string                     `json:"channel_id,omitempty"`
-	Body                  string                     `json:"body"`
-	CreatedAt             time.Time                  `json:"created_at"`
-	ExpiresAt             time.Time                  `json:"expires_at"`
-	State                 model.DeliveryReceiptState `json:"state"`
-	DeliveredSessionID    string                     `json:"delivered_session_id,omitempty"`
-	DeliveredAt           time.Time                  `json:"delivered_at,omitempty"`
-	Reason                string                     `json:"reason,omitempty"`
+	MessageID             string `json:"message_id"`
+	SenderSessionID       string `json:"sender_session_id"`
+	SenderParticipantID   string `json:"sender_participant_id"`
+	TargetParticipantID   string `json:"target_participant_id"`
+	TargetAgentID         string `json:"target_agent_id,omitempty"`
+	TargetAnswerPublicKey string `json:"target_answer_public_key,omitempty"` // WO-122: send response exposes the target session's declared key.
+	// WO-174: server-side handle resolution provenance. Present only when a
+	// directed send targeted a stable handle and the broker resolved it.
+	TargetHandle                string                     `json:"target_handle,omitempty"`
+	TargetRepository            string                     `json:"target_repository,omitempty"`
+	ResolvedTargetParticipantID string                     `json:"resolved_target_participant_id,omitempty"`
+	ResolvedTargetSessionID     string                     `json:"resolved_target_session_id,omitempty"`
+	ResolutionMode              string                     `json:"resolution_mode,omitempty"`
+	IgnoredTargetParticipantID  string                     `json:"ignored_target_participant_id,omitempty"`
+	ChannelID                   string                     `json:"channel_id,omitempty"`
+	Body                        string                     `json:"body"`
+	CreatedAt                   time.Time                  `json:"created_at"`
+	ExpiresAt                   time.Time                  `json:"expires_at"`
+	State                       model.DeliveryReceiptState `json:"state"`
+	DeliveredSessionID          string                     `json:"delivered_session_id,omitempty"`
+	DeliveredAt                 time.Time                  `json:"delivered_at,omitempty"`
+	Reason                      string                     `json:"reason,omitempty"`
 }
 
 type AgentMessageEvent struct {
@@ -170,6 +216,7 @@ func (s *Store) ensureAgentSessionAnswerPublicKeyColumn(ctx context.Context) err
 		_ = rows.Close()
 	}()
 
+	present := make(map[string]struct{})
 	for rows.Next() {
 		var cid int
 		var name string
@@ -180,18 +227,63 @@ func (s *Store) ensureAgentSessionAnswerPublicKeyColumn(ctx context.Context) err
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
 			return fmt.Errorf("scan agent_sessions schema: %w", err)
 		}
-		if name == "answer_public_key" {
-			return nil
-		}
+		present[name] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate agent_sessions schema: %w", err)
 	}
 
-	if _, err := s.db.ExecContext(ctx, `
-		ALTER TABLE agent_sessions ADD COLUMN answer_public_key TEXT NOT NULL DEFAULT ''
-	`); err != nil {
-		return fmt.Errorf("add answer_public_key to agent_sessions: %w", err)
+	// WO-174: keep handle/repository on the lazy path alongside answer_public_key
+	// so queue/inbox operations never SELECT a column a partially-migrated DB lacks.
+	for _, column := range []string{"answer_public_key", "handle", "repository"} {
+		if _, ok := present[column]; ok {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf(
+			`ALTER TABLE agent_sessions ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, column,
+		)); err != nil {
+			return fmt.Errorf("add %s to agent_sessions: %w", column, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) ensureAgentMessageResolutionColumns(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(agent_messages)`)
+	if err != nil {
+		return fmt.Errorf("inspect agent_messages schema: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	present := make(map[string]struct{})
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("scan agent_messages schema: %w", err)
+		}
+		present[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate agent_messages schema: %w", err)
+	}
+
+	for _, column := range agentMessageResolutionColumns {
+		if _, ok := present[column]; ok {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf(
+			`ALTER TABLE agent_messages ADD COLUMN %s TEXT NOT NULL DEFAULT ''`, column,
+		)); err != nil {
+			return fmt.Errorf("add %s to agent_messages: %w", column, err)
+		}
 	}
 
 	return nil
@@ -248,6 +340,7 @@ func (s *Store) RegisterAgentSession(
 		}
 	}
 
+	// WO-176: omitted heartbeat route keys preserve the existing handle/repository.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO agent_sessions (
 			agent_id,
@@ -257,6 +350,8 @@ func (s *Store) RegisterAgentSession(
 			capabilities_json,
 			roles_json,
 			answer_public_key,
+			handle,
+			repository,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -264,7 +359,7 @@ func (s *Store) RegisterAgentSession(
 			replaces_session_id,
 			registered_at,
 			last_seen_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			agent_id = excluded.agent_id,
 			installation_id = excluded.installation_id,
@@ -272,6 +367,14 @@ func (s *Store) RegisterAgentSession(
 			capabilities_json = excluded.capabilities_json,
 			roles_json = excluded.roles_json,
 			answer_public_key = excluded.answer_public_key,
+			handle = CASE
+				WHEN excluded.handle = '' THEN agent_sessions.handle
+				ELSE excluded.handle
+			END,
+			repository = CASE
+				WHEN excluded.repository = '' THEN agent_sessions.repository
+				ELSE excluded.repository
+			END,
 			delivery_mode = excluded.delivery_mode,
 			session_status = excluded.session_status,
 			lease_expires_at = excluded.lease_expires_at,
@@ -290,6 +393,8 @@ func (s *Store) RegisterAgentSession(
 		joinCapabilities(payload.Capabilities),
 		joinCapabilities(payload.Roles),
 		strings.TrimSpace(payload.AnswerPublicKey),
+		strings.TrimSpace(payload.Handle),
+		strings.TrimSpace(payload.Repository),
 		string(payload.DeliveryMode),
 		string(payload.SessionStatus),
 		formatTime(leaseExpiresAt),
@@ -310,6 +415,8 @@ func (s *Store) RegisterAgentSession(
 			capabilities_json,
 			roles_json,
 			answer_public_key,
+			handle,
+			repository,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -358,6 +465,9 @@ func (s *Store) QueueAgentMessage(
 		ctx = context.Background()
 	}
 	if err := s.ensureAgentSessionAnswerPublicKeyColumn(ctx); err != nil {
+		return AgentMessageRecord{}, err
+	}
+	if err := s.ensureAgentMessageResolutionColumns(ctx); err != nil {
 		return AgentMessageRecord{}, err
 	}
 	if now.IsZero() {
@@ -418,6 +528,12 @@ func (s *Store) QueueAgentMessage(
 			target_participant_id,
 			target_agent_id,
 			target_answer_public_key,
+			target_handle,
+			target_repository,
+			resolved_target_participant_id,
+			resolved_target_session_id,
+			resolution_mode,
+			ignored_target_participant_id,
 			channel_id,
 			body,
 			created_at,
@@ -426,7 +542,7 @@ func (s *Store) QueueAgentMessage(
 			delivered_session_id,
 			delivered_at,
 			reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '')
 	`,
 		input.MessageID,
 		input.SenderSessionID,
@@ -434,6 +550,12 @@ func (s *Store) QueueAgentMessage(
 		input.TargetParticipantID,
 		targetAgentID,
 		targetAnswerPublicKey,
+		strings.TrimSpace(input.TargetHandle),
+		strings.TrimSpace(input.Repository),
+		strings.TrimSpace(input.ResolvedTargetParticipantID),
+		strings.TrimSpace(input.ResolvedTargetSessionID),
+		strings.TrimSpace(input.ResolutionMode),
+		strings.TrimSpace(input.IgnoredTargetParticipantID),
 		input.ChannelID,
 		input.Body,
 		formatTime(now),
@@ -477,6 +599,101 @@ func (s *Store) QueueAgentMessage(
 	return record, nil
 }
 
+// ResolveTargetHandle maps a stable logical handle (+ optional repository scope)
+// to the freshest-live participant, ARP-style: the sender addresses the handle,
+// the store resolves the current live participant at send time. WO-174.
+//
+// OSS scope note: liveness is session_status='online' AND lease_expires_at>now,
+// and among live matches the freshest is chosen by last_seen_at. OSS does NOT
+// carry logical-origin/presence-signature provenance, so it intentionally omits
+// the supersession + trust-rank tiebreak layers a provenance-bearing consumer
+// applies; last_seen_at ordering is the deterministic OSS approximation.
+func (s *Store) ResolveTargetHandle(
+	ctx context.Context,
+	handle string,
+	repository string,
+	now time.Time,
+) (ResolvedTargetHandle, error) {
+	if s == nil || s.db == nil {
+		return ResolvedTargetHandle{}, errors.New("store is not initialized")
+	}
+	handle = strings.TrimSpace(handle)
+	if handle == "" {
+		return ResolvedTargetHandle{}, ErrTargetHandleNotFound
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := s.ensureAgentSessionAnswerPublicKeyColumn(ctx); err != nil {
+		return ResolvedTargetHandle{}, err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	repository = strings.TrimSpace(repository)
+
+	// A #-suffixed handle names one exact session key and must fail closed: it
+	// never broadens to role/repo matching, and multiple live rows are never
+	// ambiguous (the newest wins). WO-174.
+	suffixed := strings.Contains(handle, "#")
+
+	args := []any{handle}
+	query := `
+		SELECT participant_id, session_id, session_status, lease_expires_at
+		FROM agent_sessions
+		WHERE handle = ?`
+	if repository != "" {
+		query += ` AND repository = ?`
+		args = append(args, repository)
+	}
+	query += ` ORDER BY last_seen_at DESC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return ResolvedTargetHandle{}, fmt.Errorf("resolve target handle: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var live []ResolvedTargetHandle
+	staleMatches := 0
+	totalMatches := 0
+	for rows.Next() {
+		var participantID, sessionID, sessionStatus, leaseExpiresAt string
+		if err := rows.Scan(&participantID, &sessionID, &sessionStatus, &leaseExpiresAt); err != nil {
+			return ResolvedTargetHandle{}, fmt.Errorf("scan target handle candidate: %w", err)
+		}
+		totalMatches++
+		isLive := model.AgentSessionStatus(sessionStatus) == model.AgentSessionOnline &&
+			now.Before(parseTime(leaseExpiresAt))
+		if isLive {
+			live = append(live, ResolvedTargetHandle{ParticipantID: participantID, SessionID: sessionID})
+		} else {
+			staleMatches++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ResolvedTargetHandle{}, fmt.Errorf("iterate target handle candidates: %w", err)
+	}
+
+	switch {
+	case totalMatches == 0:
+		return ResolvedTargetHandle{}, ErrTargetHandleNotFound
+	case len(live) == 0:
+		return ResolvedTargetHandle{StaleMatches: staleMatches}, ErrTargetHandleNotLive
+	case len(live) > 1 && !suffixed:
+		// A broad selector matching multiple live participants cannot be routed
+		// safely; a #-suffixed selector deterministically takes the newest.
+		return ResolvedTargetHandle{}, ErrTargetHandleAmbiguous
+	}
+
+	// live is already ordered by last_seen_at DESC, so the head is freshest.
+	resolved := live[0]
+	resolved.StaleMatches = staleMatches
+	return resolved, nil
+}
+
 func (s *Store) PeekAgentInbox(
 	ctx context.Context,
 	sessionID string,
@@ -493,6 +710,9 @@ func (s *Store) PeekAgentInbox(
 		ctx = context.Background()
 	}
 	if err := s.ensureAgentSessionAnswerPublicKeyColumn(ctx); err != nil {
+		return AgentSession{}, nil, err
+	}
+	if err := s.ensureAgentMessageResolutionColumns(ctx); err != nil {
 		return AgentSession{}, nil, err
 	}
 	if now.IsZero() {
@@ -523,6 +743,8 @@ func (s *Store) PeekAgentInbox(
 			capabilities_json,
 			roles_json,
 			answer_public_key,
+			handle,
+			repository,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -603,6 +825,9 @@ func (s *Store) DeliverAgentMessage(
 	if err := s.ensureAgentSessionAnswerPublicKeyColumn(ctx); err != nil {
 		return AgentMessageRecord{}, err
 	}
+	if err := s.ensureAgentMessageResolutionColumns(ctx); err != nil {
+		return AgentMessageRecord{}, err
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -628,6 +853,8 @@ func (s *Store) DeliverAgentMessage(
 			capabilities_json,
 			roles_json,
 			answer_public_key,
+			handle,
+			repository,
 			delivery_mode,
 			session_status,
 			lease_expires_at,
@@ -717,6 +944,9 @@ func (s *Store) GetAgentMessage(
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := s.ensureAgentMessageResolutionColumns(ctx); err != nil {
+		return AgentMessageRecord{}, err
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -841,6 +1071,8 @@ func loadAgentSession(scanner agentSessionScanner) (AgentSession, error) {
 		&capabilities,
 		&roles,
 		&session.AnswerPublicKey,
+		&session.Handle,
+		&session.Repository,
 		&deliveryMode,
 		&sessionStatus,
 		&leaseExpiresAt,
@@ -878,6 +1110,12 @@ func loadAgentMessageRecordTx(ctx context.Context, tx *sql.Tx, messageID string)
 			target_participant_id,
 			target_agent_id,
 			target_answer_public_key,
+			target_handle,
+			target_repository,
+			resolved_target_participant_id,
+			resolved_target_session_id,
+			resolution_mode,
+			ignored_target_participant_id,
 			channel_id,
 			body,
 			created_at,
@@ -896,6 +1134,12 @@ func loadAgentMessageRecordTx(ctx context.Context, tx *sql.Tx, messageID string)
 		&record.Message.TargetParticipantID,
 		&record.Message.TargetAgentID,
 		&record.Message.TargetAnswerPublicKey,
+		&record.Message.TargetHandle,
+		&record.Message.TargetRepository,
+		&record.Message.ResolvedTargetParticipantID,
+		&record.Message.ResolvedTargetSessionID,
+		&record.Message.ResolutionMode,
+		&record.Message.IgnoredTargetParticipantID,
 		&record.Message.ChannelID,
 		&record.Message.Body,
 		&createdAt,

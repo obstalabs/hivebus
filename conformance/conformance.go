@@ -43,17 +43,18 @@ import (
 // protocol contract version in internal/spec (spec.V0().Version). A consumer
 // asserts its vendored Version is within one minor of the peer's; see the
 // field-change discipline in the package doc.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Route identifies a /v0/agents wire surface covered by the fixtures.
 type Route string
 
 const (
-	RouteSessionRegister  Route = "agents.sessions.register"
-	RouteSessionHeartbeat Route = "agents.sessions.heartbeat"
-	RouteMessageSend      Route = "agents.messages.send"
-	RouteMessageDeliver   Route = "agents.messages.deliver"
-	RouteInbox            Route = "agents.sessions.inbox"
+	RouteSessionRegister   Route = "agents.sessions.register"
+	RouteSessionHeartbeat  Route = "agents.sessions.heartbeat"
+	RouteMessageSend       Route = "agents.messages.send"
+	RouteMessageSendHandle Route = "agents.messages.send_by_handle" // WO-174
+	RouteMessageDeliver    Route = "agents.messages.deliver"
+	RouteInbox             Route = "agents.sessions.inbox"
 )
 
 // Routes returns every covered route in a stable order.
@@ -72,11 +73,12 @@ var goldenFS embed.FS
 // goldenIndex maps each route to its golden fixture file. Adding a route means
 // adding its file here and a sample in samples.go.
 var goldenIndex = map[Route]string{
-	RouteSessionRegister:  "testdata/agents_sessions_register.json",
-	RouteSessionHeartbeat: "testdata/agents_sessions_heartbeat.json",
-	RouteMessageSend:      "testdata/agents_messages_send.json",
-	RouteMessageDeliver:   "testdata/agents_messages_deliver.json",
-	RouteInbox:            "testdata/agents_sessions_inbox.json",
+	RouteSessionRegister:   "testdata/agents_sessions_register.json",
+	RouteSessionHeartbeat:  "testdata/agents_sessions_heartbeat.json",
+	RouteMessageSend:       "testdata/agents_messages_send.json",
+	RouteMessageSendHandle: "testdata/agents_messages_send_by_handle.json",
+	RouteMessageDeliver:    "testdata/agents_messages_deliver.json",
+	RouteInbox:             "testdata/agents_sessions_inbox.json",
 }
 
 // Golden returns the canonical wire bytes for a route (indented JSON).

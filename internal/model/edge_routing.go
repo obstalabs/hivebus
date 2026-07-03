@@ -63,6 +63,8 @@ type AgentSessionPayload struct {
 	Capabilities      []string           `json:"capabilities,omitempty"`
 	Roles             []string           `json:"roles,omitempty"`
 	AnswerPublicKey   string             `json:"answer_public_key,omitempty"` // WO-122: discovery key only; askers pin trust locally.
+	Handle            string             `json:"handle,omitempty"`            // WO-174: stable logical route key; resolved to a live participant at send time.
+	Repository        string             `json:"repository,omitempty"`        // WO-174: optional scope for role handles.
 	DeliveryMode      AgentDeliveryMode  `json:"delivery_mode"`
 	SessionStatus     AgentSessionStatus `json:"session_status"`
 	LeaseExpiresAt    string             `json:"lease_expires_at"`
