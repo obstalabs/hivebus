@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -639,7 +640,7 @@ func (s *Store) ResolveTargetHandle(
 
 	args := []any{handle}
 	query := `
-		SELECT participant_id, session_id, session_status, lease_expires_at
+		SELECT participant_id, session_id, session_status, lease_expires_at, last_seen_at
 		FROM agent_sessions
 		WHERE handle = ?`
 	if repository != "" {
@@ -656,19 +657,29 @@ func (s *Store) ResolveTargetHandle(
 		_ = rows.Close()
 	}()
 
-	var live []ResolvedTargetHandle
+	type liveTargetCandidate struct {
+		resolved   ResolvedTargetHandle
+		lastSeenAt time.Time
+	}
+	var live []liveTargetCandidate
 	staleMatches := 0
 	totalMatches := 0
 	for rows.Next() {
-		var participantID, sessionID, sessionStatus, leaseExpiresAt string
-		if err := rows.Scan(&participantID, &sessionID, &sessionStatus, &leaseExpiresAt); err != nil {
+		var participantID, sessionID, sessionStatus, leaseExpiresAt, lastSeenAt string
+		if err := rows.Scan(&participantID, &sessionID, &sessionStatus, &leaseExpiresAt, &lastSeenAt); err != nil {
 			return ResolvedTargetHandle{}, fmt.Errorf("scan target handle candidate: %w", err)
 		}
 		totalMatches++
 		isLive := model.AgentSessionStatus(sessionStatus) == model.AgentSessionOnline &&
 			now.Before(parseTime(leaseExpiresAt))
 		if isLive {
-			live = append(live, ResolvedTargetHandle{ParticipantID: participantID, SessionID: sessionID})
+			live = append(live, liveTargetCandidate{
+				resolved: ResolvedTargetHandle{
+					ParticipantID: participantID,
+					SessionID:     sessionID,
+				},
+				lastSeenAt: parseTime(lastSeenAt),
+			})
 		} else {
 			staleMatches++
 		}
@@ -676,6 +687,11 @@ func (s *Store) ResolveTargetHandle(
 	if err := rows.Err(); err != nil {
 		return ResolvedTargetHandle{}, fmt.Errorf("iterate target handle candidates: %w", err)
 	}
+	sort.SliceStable(live, func(i, j int) bool {
+		// WO-181: RFC3339Nano is variable-width, so SQL text ordering can put an
+		// exact-second timestamp before a later fractional timestamp.
+		return live[i].lastSeenAt.After(live[j].lastSeenAt)
+	})
 
 	switch {
 	case totalMatches == 0:
@@ -688,8 +704,8 @@ func (s *Store) ResolveTargetHandle(
 		return ResolvedTargetHandle{}, ErrTargetHandleAmbiguous
 	}
 
-	// live is already ordered by last_seen_at DESC, so the head is freshest.
-	resolved := live[0]
+	// live is ordered by parsed last_seen_at DESC, so the head is freshest.
+	resolved := live[0].resolved
 	resolved.StaleMatches = staleMatches
 	return resolved, nil
 }

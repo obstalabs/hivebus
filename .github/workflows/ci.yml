@@ -95,15 +95,17 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           OWNER_AUTHOR: "obstalabs <265053889+obstalabs@users.noreply.github.com>"
+          TRUSTED_OWNER_PR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'obstalabs' }}
         run: |
           # WO-160: external contributors must provide a genuine DCO trailer.
-          # Owner-authored commits use the authenticated repo owner identity and
-          # must not be rewritten by agents to manufacture legal certification.
+          # WO-180: author name/email alone is user-controlled, so the owner
+          # exemption only applies to same-repository PRs opened by the owner.
+          # Agents must not rewrite commits to manufacture legal certification.
           missing=0
           for sha in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
             author="$(git show -s --format='%an <%ae>' "$sha")"
-            if [ "$author" = "$OWNER_AUTHOR" ]; then
-              echo "Owner-authored commit $sha by $author accepted under repository DCO policy."
+            if [ "${TRUSTED_OWNER_PR:-false}" = "true" ] && [ "$author" = "$OWNER_AUTHOR" ]; then
+              echo "Owner-authored commit $sha by $author accepted under trusted same-repository DCO policy."
               continue
             fi
             if ! git show -s --format='%B' "$sha" | grep -qiE "^Signed-off-by: .+ <.+@.+>"; then

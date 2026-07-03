@@ -175,6 +175,28 @@ func TestResolveTargetHandleSuffixedNeverAmbiguousAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestResolveTargetHandleOrdersLastSeenChronologically(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Date(2026, 7, 3, 12, 1, 0, 0, time.UTC)
+	exactSecond := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	fractionalLater := exactSecond.Add(100 * time.Millisecond)
+
+	// WO-181: RFC3339Nano text DESC sorts "...00Z" before "...00.1Z"; the
+	// resolver must compare parsed times so newest-wins is chronological.
+	registerHandleSession(t, st, "sess_exact", "participant-exact", "worker/repo#nanos", "repo",
+		now.Add(30*time.Minute), exactSecond)
+	registerHandleSession(t, st, "sess_fractional", "participant-fractional", "worker/repo#nanos", "repo",
+		now.Add(30*time.Minute), fractionalLater)
+
+	resolved, err := st.ResolveTargetHandle(t.Context(), "worker/repo#nanos", "repo", now)
+	if err != nil {
+		t.Fatalf("ResolveTargetHandle(RFC3339Nano ordering) error = %v", err)
+	}
+	if resolved.ParticipantID != "participant-fractional" {
+		t.Fatalf("resolved = %q, want participant-fractional (chronologically newest)", resolved.ParticipantID)
+	}
+}
+
 // A repository scope narrows resolution to the matching session.
 func TestResolveTargetHandleScopesRepository(t *testing.T) {
 	st := openTestStore(t)
