@@ -4,7 +4,7 @@
 
 # hivebus
 
-A signed channel for agent-to-agent questions that binds the world the answerer observed, not just who spoke. Open source (MIT). The same dumb-but-honest bus also carries agent-native issue intake, investigation, and promotion-ready work-order creation.
+A signed channel for agent-to-agent questions. The signature covers what the answerer observed — repo identity, working directory, and inode — not only who signed, so a correctly signed answer about the wrong checkout is rejected. Open source (MIT). The same bus also carries agent issue intake, investigation, and work-order drafting.
 
 ## What This Is
 
@@ -43,7 +43,7 @@ Out-of-tree integrations may be commercial, but they do not own the protocol:
 
 ## Core Vs Out-of-Tree
 
-Hivebus only becomes essential if it carries the whole path from issue intake to tracked execution. That means the open core line is not a crippled toy: it includes the protocol core and the canonical `workledger` bridge. Out-of-tree integrations can add hosted, commercial, org, and compliance layers on top.
+Hivebus only becomes essential if it carries the whole path from issue intake to tracked execution. So the open core includes the protocol core and the canonical `workledger` bridge, not only a subset. Out-of-tree integrations can add hosted, commercial, org, and compliance layers on top.
 
 Deployment location is not the split. Core stays self-hostable; integration-specific policy can run wherever its operator needs it. Local, Fly, VPS, and private infrastructure are all valid deployment targets.
 
@@ -60,7 +60,7 @@ Deployment location is not the split. Core stays self-hostable; integration-spec
 | Shared queues, RBAC, team/org policy packs | no | yes | out-of-tree integration |
 | Enterprise retention, BYOK, regional controls, audit exports | no | yes | out-of-tree integration |
 
-This is the separation line: core owns the structured conversation substrate plus canonical execution tracking; out-of-tree integrations own live-session, hosted, organizational, and compliance layers that sit on top.
+Core owns the structured conversation substrate plus canonical execution tracking; out-of-tree integrations own the live-session, hosted, org, and compliance layers that sit on top.
 
 ## What This Is NOT
 
@@ -150,11 +150,11 @@ You get a signed answer back:
 delivered: true   answers: 1   response_status: answered
 ```
 
-That is the whole point: the **meat router is gone**. Instead of a human copy-pasting "what
-HEAD are you on?" between two agent sessions, the agents ask each other directly and the
-answer is signed, so the asker can trust it without re-deriving it. `delivered: true /
-answers: 0 / no_answer` is also a success for the channel -- the question was delivered,
-nobody answered (hivebus is the ether, not the mind).
+This removes the human relay. Instead of a person copy-pasting "what HEAD are you on?"
+between two agent sessions, the agents ask each other directly and the answer is signed, so
+the asker can trust it without re-deriving it. `delivered: true / answers: 0 / no_answer` is
+also a success for the channel: the question was delivered, nobody answered. Delivery is
+guaranteed; an answer is not.
 
 The first keyless ask pins the answerer's key (SSH `known_hosts` model). For the fish/bash/sh
 variants, multiple repos, key pinning, and cross-machine asks over SSH, see the
@@ -247,11 +247,12 @@ The recovery capsule contains verified diagnosis, evidence refs, stale/rejected 
 
 ## Architecture
 
-The point of Hivebus is that **agents can ask each other questions instead of working
-blind**. One agent asks another -- "which checkout is canonical? what HEAD are you on?
-are you done?" -- and gets a signed answer back, instead of crawling the other repo,
-re-deriving state, or interrupting a human to relay. The bus carries the question and the
-answer, verifies provenance at the edges, and decides nothing itself.
+In Hivebus, one agent asks another a read-only question -- "which checkout is canonical?
+what HEAD are you on? are you done?" -- and gets a signed answer back, instead of crawling
+the other repo, re-deriving state, or interrupting a human to relay. The bus carries the
+question and the answer and decides nothing itself; the asking CLI verifies the answer's
+provenance before trusting it (see Known Limitations for where runtime verification still
+lags the CLI).
 
 Direct ask/answer:
 
