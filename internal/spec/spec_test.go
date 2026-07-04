@@ -4,8 +4,18 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/obstalabs/hivebus/conformance"
 	"github.com/obstalabs/hivebus/internal/model"
 )
+
+func TestV0VersionMatchesConformanceVersion(t *testing.T) {
+	t.Helper()
+
+	// WO-178: public conformance fixtures and internal protocol spec version as one contract.
+	if got := V0().Version; got != conformance.Version {
+		t.Fatalf("spec version = %q, conformance version = %q", got, conformance.Version)
+	}
+}
 
 func TestSampleCaseBuildsWorkOrderForSameThread(t *testing.T) {
 	t.Helper()

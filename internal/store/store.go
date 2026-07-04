@@ -398,6 +398,12 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			target_participant_id TEXT NOT NULL,
 			target_agent_id TEXT NOT NULL,
 			target_answer_public_key TEXT NOT NULL DEFAULT '',
+			target_handle TEXT NOT NULL DEFAULT '',
+			target_repository TEXT NOT NULL DEFAULT '',
+			resolved_target_participant_id TEXT NOT NULL DEFAULT '',
+			resolved_target_session_id TEXT NOT NULL DEFAULT '',
+			resolution_mode TEXT NOT NULL DEFAULT '',
+			ignored_target_participant_id TEXT NOT NULL DEFAULT '',
 			channel_id TEXT NOT NULL DEFAULT '',
 			body TEXT NOT NULL,
 			created_at TEXT NOT NULL,
@@ -477,6 +483,32 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		ALTER TABLE agent_messages ADD COLUMN target_answer_public_key TEXT NOT NULL DEFAULT ''
 	`); err != nil {
 		return err
+	}
+	// WO-175: durable handle-resolution provenance must survive message reloads.
+	for _, column := range agentMessageResolutionColumns {
+		if err := execIgnoreDuplicateColumn(ctx, db, fmt.Sprintf(`
+			ALTER TABLE agent_messages ADD COLUMN %s TEXT NOT NULL DEFAULT ''
+		`, column)); err != nil {
+			return err
+		}
+	}
+	// WO-174: stable logical handle + repository scope enable server-side
+	// handle->freshest-live-participant resolution at send time (ARP-style).
+	if err := execIgnoreDuplicateColumn(ctx, db, `
+		ALTER TABLE agent_sessions ADD COLUMN handle TEXT NOT NULL DEFAULT ''
+	`); err != nil {
+		return err
+	}
+	if err := execIgnoreDuplicateColumn(ctx, db, `
+		ALTER TABLE agent_sessions ADD COLUMN repository TEXT NOT NULL DEFAULT ''
+	`); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS agent_sessions_handle_idx
+			ON agent_sessions(handle, repository, session_status, lease_expires_at, last_seen_at)
+	`); err != nil {
+		return fmt.Errorf("migrate sqlite store: %w", err)
 	}
 
 	return nil

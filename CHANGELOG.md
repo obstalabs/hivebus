@@ -6,6 +6,8 @@
 
 - Public embedding surface for the agent-message runtime: `embed.ServeLocal` serves Hivebus over a caller-provided local listener so another product can host the bus in-process without reimplementing the protocol.
 - Public conformance package for the `/v0/agents/*` wire contract, with importable golden JSON fixtures that external consumers can run in their own CI.
+- Server-side `target_handle` resolution on directed sends: a sender can address a stable `handle` (with an optional `repository` scope) and the bus resolves it to the freshest live participant at send time, so a message survives the target agent restarting under a new participant ID. Resolution runs on directed sends only; channel and broadcast sends are unchanged. Sessions register a `handle`/`repository`; the resolved message carries `resolved_target_participant_id`, `resolved_target_session_id`, `resolution_mode`, and the overridden `ignored_target_participant_id`, persisted through inbox, get, and deliver reads.
+- Conformance route and golden fixture for a handle-resolved message, so a consumer can pin the resolution wire shape. Wire-contract version (`conformance.Version` / `spec.V0().Version`) bumped 0.2.0 → 0.3.0 for the added optional fields, and a test now fails if the two versions drift.
 - Standalone boardroom CLI commands: `hivebus say`, `hivebus inbox`, and `hivebus listen` let a non-orchestrated process send, read, and optionally acknowledge local Hivebus messages.
 - Windows release artifacts are now built alongside macOS and Linux artifacts for amd64 and arm64.
 - README install instructions now cover Go installs, direct release-archive installs, and the optional Homebrew tap.
@@ -50,7 +52,7 @@
 - `SECURITY.md`: disclosure policy and the honest envelope-signature verification state.
 - Orthogonal envelope routing fields for visibility, scope, reply policy, redirects, and collection.
 - Signed envelope schema primitives for query, answer, request, and authority directive messages.
-- Typed NeuroRouter agent-run lifecycle envelopes (`nr.run.*`) — hivebus as receipts substrate for governed runs.
+- Typed NeuroRouter agent-run lifecycle envelopes (`nr.run.*`) for preserving governed-run receipts.
 
 ### Changed
 

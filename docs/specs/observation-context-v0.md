@@ -84,7 +84,7 @@ The asker verifies a returned answer in a fixed order (`internal/cli/ask.go`,
 
 Steps 3 and 5 are distinct: a bad signature fails at step 3 with a signature error; a
 correctly-signed answer that observed the *wrong world* fails at step 5 with an
-observation error. That distinction is the whole point.
+observation error.
 
 ### Step 5 in detail
 

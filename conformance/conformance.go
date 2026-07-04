@@ -2,9 +2,9 @@
 // Hivebus /v0/agents protocol. It exists so that Hivebus and any external
 // consumer (for example NeuroRouter Pro) cannot silently DRIFT: both vendor or
 // import this package and run Compare against their own marshaled payloads in
-// their own CI. If either side changes a wire field without an intentional,
-// declared version bump, the golden fixtures fail the build on the side that
-// diverged.
+// their own CI. If either side changes a sampled wire field without an
+// intentional, declared version bump, the golden fixtures fail the build on the
+// side that diverged.
 //
 // Why this package is PUBLIC (not internal/, not a testdata directory): Go's
 // internal/ rule makes internal packages unimportable across modules, and a
@@ -16,7 +16,8 @@
 // FIELD-CHANGE DISCIPLINE (the version-lag rule lives here, with the code it
 // governs, so it travels when a consumer vendors this package):
 //   - Adding an OPTIONAL field (json:",omitempty") is a PATCH: existing golden
-//     fixtures still match; regenerate to add coverage.
+//     fixtures still match when the field is omitted. Regenerate to add coverage
+//     if the field should be pinned by the drift gate.
 //   - Renaming, removing, retyping, or making-required any wire field is a
 //     BREAKING change and MUST bump the MINOR version (pre-1.0) — and during the
 //     change window both versions must be representable.
@@ -42,17 +43,18 @@ import (
 // protocol contract version in internal/spec (spec.V0().Version). A consumer
 // asserts its vendored Version is within one minor of the peer's; see the
 // field-change discipline in the package doc.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Route identifies a /v0/agents wire surface covered by the fixtures.
 type Route string
 
 const (
-	RouteSessionRegister  Route = "agents.sessions.register"
-	RouteSessionHeartbeat Route = "agents.sessions.heartbeat"
-	RouteMessageSend      Route = "agents.messages.send"
-	RouteMessageDeliver   Route = "agents.messages.deliver"
-	RouteInbox            Route = "agents.sessions.inbox"
+	RouteSessionRegister   Route = "agents.sessions.register"
+	RouteSessionHeartbeat  Route = "agents.sessions.heartbeat"
+	RouteMessageSend       Route = "agents.messages.send"
+	RouteMessageSendHandle Route = "agents.messages.send_by_handle" // WO-174
+	RouteMessageDeliver    Route = "agents.messages.deliver"
+	RouteInbox             Route = "agents.sessions.inbox"
 )
 
 // Routes returns every covered route in a stable order.
@@ -71,11 +73,12 @@ var goldenFS embed.FS
 // goldenIndex maps each route to its golden fixture file. Adding a route means
 // adding its file here and a sample in samples.go.
 var goldenIndex = map[Route]string{
-	RouteSessionRegister:  "testdata/agents_sessions_register.json",
-	RouteSessionHeartbeat: "testdata/agents_sessions_heartbeat.json",
-	RouteMessageSend:      "testdata/agents_messages_send.json",
-	RouteMessageDeliver:   "testdata/agents_messages_deliver.json",
-	RouteInbox:            "testdata/agents_sessions_inbox.json",
+	RouteSessionRegister:   "testdata/agents_sessions_register.json",
+	RouteSessionHeartbeat:  "testdata/agents_sessions_heartbeat.json",
+	RouteMessageSend:       "testdata/agents_messages_send.json",
+	RouteMessageSendHandle: "testdata/agents_messages_send_by_handle.json",
+	RouteMessageDeliver:    "testdata/agents_messages_deliver.json",
+	RouteInbox:             "testdata/agents_sessions_inbox.json",
 }
 
 // Golden returns the canonical wire bytes for a route (indented JSON).

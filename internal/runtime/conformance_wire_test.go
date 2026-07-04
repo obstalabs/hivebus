@@ -17,9 +17,9 @@ import (
 // wire types serialize identically to the public conformance contract. The
 // conformance package's own test proves the mirror structs match the golden
 // fixtures; this test proves the INTERNAL structs match the same fixtures — so a
-// field change in internal/runtime or internal/model that diverges from the
-// shared contract fails here, on the Hivebus side, exactly as it would fail on a
-// consumer side. Together they close the drift failure class.
+// sampled-field change in internal/runtime or internal/model that diverges from
+// the shared contract fails here, on the Hivebus side, exactly as it would fail
+// on a consumer side. Together they close the non-additive drift failure class.
 //
 // On an intentional wire change: update the internal struct AND regenerate the
 // golden (UPDATE_GOLDEN=1 go test ./conformance/...) AND bump conformance.Version.
@@ -39,23 +39,49 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 
 	deliverRequest := deliverAgentMessageRequest{SessionID: "nr-session-2"}
 
-	// WO-159: pin the runtime inbox response body, not only path addressing.
+	// WO-174: pin the resolved-by-handle message shape (ghost-kill anchor). The
+	// REAL store.AgentMessage with resolution provenance must serialize exactly
+	// like conformance.Sample(RouteMessageSendHandle).
+	sentByHandle := store.AgentMessage{
+		MessageID:                   "hbm-2",
+		SenderSessionID:             "nr-session-1",
+		SenderParticipantID:         "nr-participant-1",
+		TargetParticipantID:         "nr-participant-2",
+		TargetHandle:                "architect",
+		TargetRepository:            "neurorouter-pro",
+		ResolvedTargetParticipantID: "nr-participant-2",
+		ResolvedTargetSessionID:     "nr-session-2",
+		ResolutionMode:              store.ResolutionModeServerSideHandle,
+		IgnoredTargetParticipantID:  "nr-participant-1",
+		Body:                        "which work order are you on?",
+		CreatedAt:                   time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC),
+		ExpiresAt:                   time.Date(2026, 1, 1, 0, 10, 30, 0, time.UTC),
+		State:                       model.DeliveryReceiptQueued,
+	}
+
+	// WO-179: pin handle-resolution provenance in the runtime inbox response body.
 	inbox := inboxResponse{
 		Status:  "ok",
 		Session: conformanceAgentSession(),
 		Messages: []store.AgentMessageRecord{
 			{
 				Message: store.AgentMessage{
-					MessageID:             "hbm-1",
-					SenderSessionID:       "nr-session-2",
-					SenderParticipantID:   "nr-participant-2",
-					TargetParticipantID:   "nr-participant-1",
-					TargetAgentID:         "claude/hivebus",
-					TargetAnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
-					Body:                  "what work order are you on?",
-					CreatedAt:             time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC),
-					ExpiresAt:             time.Date(2026, 1, 1, 0, 10, 30, 0, time.UTC),
-					State:                 model.DeliveryReceiptQueued,
+					MessageID:                   "hbm-1",
+					SenderSessionID:             "nr-session-2",
+					SenderParticipantID:         "nr-participant-2",
+					TargetParticipantID:         "nr-participant-1",
+					TargetAgentID:               "claude/hivebus",
+					TargetAnswerPublicKey:       "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+					TargetHandle:                "architect",
+					TargetRepository:            "neurorouter-pro",
+					ResolvedTargetParticipantID: "nr-participant-1",
+					ResolvedTargetSessionID:     "nr-session-1",
+					ResolutionMode:              store.ResolutionModeServerSideHandle,
+					IgnoredTargetParticipantID:  "nr-participant-2",
+					Body:                        "what work order are you on?",
+					CreatedAt:                   time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC),
+					ExpiresAt:                   time.Date(2026, 1, 1, 0, 10, 30, 0, time.UTC),
+					State:                       model.DeliveryReceiptQueued,
 				},
 				Events: []store.AgentMessageEvent{
 					{
@@ -79,6 +105,7 @@ func TestInternalTypesMatchConformanceContract(t *testing.T) {
 		{conformance.RouteSessionRegister, sessionPayload},
 		{conformance.RouteSessionHeartbeat, sessionPayload},
 		{conformance.RouteMessageSend, sendRequest},
+		{conformance.RouteMessageSendHandle, sentByHandle},
 		{conformance.RouteMessageDeliver, deliverRequest},
 		{conformance.RouteInbox, inbox},
 	}
@@ -113,7 +140,7 @@ func TestRuntimeInboxHTTPResponseMatchesConformanceContract(t *testing.T) {
 		return rec
 	}
 
-	registerRec := postJSON(http.MethodPost, "/v0/agents/sessions/register", RoleWorker, conformanceAgentSessionPayload())
+	registerRec := postJSON(http.MethodPost, "/v0/agents/sessions/register", RoleWorker, conformanceInboxAgentSessionPayload())
 	if registerRec.Code != http.StatusCreated {
 		t.Fatalf("register status = %d, body = %s", registerRec.Code, registerRec.Body.String())
 	}
@@ -123,7 +150,9 @@ func TestRuntimeInboxHTTPResponseMatchesConformanceContract(t *testing.T) {
 		MessageID:           "hbm-1",
 		SenderSessionID:     "nr-session-2",
 		SenderParticipantID: "nr-participant-2",
-		TargetParticipantID: "nr-participant-1",
+		TargetParticipantID: "nr-participant-2", // WO-179: stale hint ignored by target_handle resolution.
+		TargetHandle:        "architect",
+		Repository:          "neurorouter-pro",
 		Body:                "what work order are you on?",
 		TTLSeconds:          600,
 	})
@@ -133,7 +162,7 @@ func TestRuntimeInboxHTTPResponseMatchesConformanceContract(t *testing.T) {
 
 	// WO-161: the real inbox route must match the public fixture after store reload.
 	now = time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC)
-	heartbeatRec := postJSON(http.MethodPost, "/v0/agents/sessions/heartbeat", RoleWorker, conformanceAgentSessionPayload())
+	heartbeatRec := postJSON(http.MethodPost, "/v0/agents/sessions/heartbeat", RoleWorker, conformanceInboxAgentSessionPayload())
 	if heartbeatRec.Code != http.StatusOK {
 		t.Fatalf("heartbeat status = %d, body = %s", heartbeatRec.Code, heartbeatRec.Body.String())
 	}
@@ -160,6 +189,10 @@ func conformanceAuthHeader(role Role) string {
 }
 
 func conformanceAgentSessionPayload() model.AgentSessionPayload {
+	return conformanceInboxAgentSessionPayload()
+}
+
+func conformanceInboxAgentSessionPayload() model.AgentSessionPayload {
 	return model.AgentSessionPayload{
 		AgentID:         "claude/hivebus",
 		InstallationID:  "install-1",
@@ -168,6 +201,8 @@ func conformanceAgentSessionPayload() model.AgentSessionPayload {
 		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
 		Roles:           []string{"worker"},
 		AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+		Handle:          "architect",       // WO-177/WO-179: public route key pinned in inbox.
+		Repository:      "neurorouter-pro", // WO-177/WO-179: route-key scope pinned in inbox.
 		DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
 		SessionStatus:   model.AgentSessionStatus("online"),
 		LeaseExpiresAt:  "2026-01-01T00:02:00Z",
@@ -184,6 +219,8 @@ func conformanceAgentSession() store.AgentSession {
 		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
 		Roles:           []string{"worker"},
 		AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+		Handle:          "architect",       // WO-179: inbox session route key.
+		Repository:      "neurorouter-pro", // WO-179: inbox session route-key scope.
 		DeliveryMode:    model.AgentDeliveryMode("queued_delivery"),
 		SessionStatus:   model.AgentSessionStatus("online"),
 		LeaseExpiresAt:  time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC),

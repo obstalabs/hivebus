@@ -2,8 +2,8 @@
 
 Hivebus can preserve governed NeuroRouter execution receipts on the same typed
 thread that carried intake, diagnosis, and Workledger handoff. These envelopes
-are receipts, not runtime commands. NeuroRouter governs the run; Workledger owns
-work truth; Hivebus preserves the thread of evidence.
+are receipts, not runtime commands. NeuroRouter runs and governs the execution.
+Workledger records the work. Hivebus keeps the receipts on the thread.
 
 ## Envelope Types
 

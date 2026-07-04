@@ -100,6 +100,8 @@ func goldenFileName(route conformance.Route) string {
 		return "agents_sessions_heartbeat.json"
 	case conformance.RouteMessageSend:
 		return "agents_messages_send.json"
+	case conformance.RouteMessageSendHandle:
+		return "agents_messages_send_by_handle.json"
 	case conformance.RouteMessageDeliver:
 		return "agents_messages_deliver.json"
 	case conformance.RouteInbox:

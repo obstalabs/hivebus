@@ -100,7 +100,7 @@ type NeuroRouterRunContract struct {
 func V0() Document {
 	return Document{
 		Name:        "hivebus",
-		Version:     "0.2.0",
+		Version:     "0.3.0",
 		Description: "Secure threaded coordination for agent-native issue intake and work-order creation.",
 		MessageTypes: []model.MessageType{
 			model.MessageTypeTaskRequest,

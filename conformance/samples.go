@@ -18,6 +18,8 @@ type SessionPayload struct {
 	Capabilities      []string `json:"capabilities,omitempty"`
 	Roles             []string `json:"roles,omitempty"`
 	AnswerPublicKey   string   `json:"answer_public_key,omitempty"`
+	Handle            string   `json:"handle,omitempty"`     // WO-177: stable logical route key.
+	Repository        string   `json:"repository,omitempty"` // WO-177: optional scope for role handles.
 	DeliveryMode      string   `json:"delivery_mode"`
 	SessionStatus     string   `json:"session_status"`
 	LeaseExpiresAt    string   `json:"lease_expires_at"`
@@ -31,6 +33,8 @@ type SendMessageRequest struct {
 	SenderSessionID     string `json:"sender_session_id"`
 	SenderParticipantID string `json:"sender_participant_id"`
 	TargetParticipantID string `json:"target_participant_id"`
+	TargetHandle        string `json:"target_handle,omitempty"` // WO-174: stable route key resolved server-side.
+	Repository          string `json:"repository,omitempty"`    // WO-174: optional scope for role handles.
 	ChannelID           string `json:"channel_id,omitempty"`
 	Body                string `json:"body"`
 	TTLSeconds          int    `json:"ttl_seconds,omitempty"`
@@ -39,6 +43,30 @@ type SendMessageRequest struct {
 // DeliverMessageRequest is the POST /v0/agents/messages/{id}/deliver request body.
 type DeliverMessageRequest struct {
 	SessionID string `json:"session_id"`
+}
+
+// SentByHandleMessage is the message shape returned when a directed send
+// targeted a stable handle and the broker resolved it server-side. It is the
+// WO-174 ghost-kill anchor: the shared contract for handle resolution
+// provenance that OSS Hivebus and any consumer must both produce. The stale
+// client-supplied participant hint is echoed as ignored_target_participant_id;
+// target_participant_id is the RESOLVED live participant, not the stale hint.
+type SentByHandleMessage struct {
+	MessageID                   string `json:"message_id"`
+	SenderSessionID             string `json:"sender_session_id"`
+	SenderParticipantID         string `json:"sender_participant_id"`
+	TargetParticipantID         string `json:"target_participant_id"`
+	TargetHandle                string `json:"target_handle,omitempty"`
+	TargetRepository            string `json:"target_repository,omitempty"`
+	ResolvedTargetParticipantID string `json:"resolved_target_participant_id,omitempty"`
+	ResolvedTargetSessionID     string `json:"resolved_target_session_id,omitempty"`
+	ResolutionMode              string `json:"resolution_mode,omitempty"`
+	IgnoredTargetParticipantID  string `json:"ignored_target_participant_id,omitempty"`
+	Body                        string `json:"body"`
+	CreatedAt                   string `json:"created_at"`
+	ExpiresAt                   string `json:"expires_at"`
+	State                       string `json:"state"`
+	DeliveredAt                 string `json:"delivered_at"`
 }
 
 // AgentSession is the public session shape embedded in inbox responses.
@@ -50,6 +78,8 @@ type AgentSession struct {
 	Capabilities      []string `json:"capabilities,omitempty"`
 	Roles             []string `json:"roles,omitempty"`
 	AnswerPublicKey   string   `json:"answer_public_key,omitempty"`
+	Handle            string   `json:"handle,omitempty"`     // WO-179: inbox session route key.
+	Repository        string   `json:"repository,omitempty"` // WO-179: inbox session route-key scope.
 	DeliveryMode      string   `json:"delivery_mode"`
 	SessionStatus     string   `json:"session_status"`
 	LeaseExpiresAt    string   `json:"lease_expires_at"`
@@ -75,20 +105,26 @@ type MessageEntry struct {
 
 // AgentMessage is the public queued-message shape returned in inbox responses.
 type AgentMessage struct {
-	MessageID             string `json:"message_id"`
-	SenderSessionID       string `json:"sender_session_id"`
-	SenderParticipantID   string `json:"sender_participant_id"`
-	TargetParticipantID   string `json:"target_participant_id"`
-	TargetAgentID         string `json:"target_agent_id,omitempty"`
-	TargetAnswerPublicKey string `json:"target_answer_public_key,omitempty"`
-	ChannelID             string `json:"channel_id,omitempty"`
-	Body                  string `json:"body"`
-	CreatedAt             string `json:"created_at"`
-	ExpiresAt             string `json:"expires_at"`
-	State                 string `json:"state"`
-	DeliveredSessionID    string `json:"delivered_session_id,omitempty"`
-	DeliveredAt           string `json:"delivered_at,omitempty"`
-	Reason                string `json:"reason,omitempty"`
+	MessageID                   string `json:"message_id"`
+	SenderSessionID             string `json:"sender_session_id"`
+	SenderParticipantID         string `json:"sender_participant_id"`
+	TargetParticipantID         string `json:"target_participant_id"`
+	TargetAgentID               string `json:"target_agent_id,omitempty"`
+	TargetAnswerPublicKey       string `json:"target_answer_public_key,omitempty"`
+	TargetHandle                string `json:"target_handle,omitempty"`                  // WO-179: handle used for inbox routing.
+	TargetRepository            string `json:"target_repository,omitempty"`              // WO-179: repository scope used for inbox routing.
+	ResolvedTargetParticipantID string `json:"resolved_target_participant_id,omitempty"` // WO-179: live participant selected by the broker.
+	ResolvedTargetSessionID     string `json:"resolved_target_session_id,omitempty"`     // WO-179: live session selected by the broker.
+	ResolutionMode              string `json:"resolution_mode,omitempty"`                // WO-179: server-side resolution mode.
+	IgnoredTargetParticipantID  string `json:"ignored_target_participant_id,omitempty"`  // WO-179: stale client hint ignored by resolution.
+	ChannelID                   string `json:"channel_id,omitempty"`
+	Body                        string `json:"body"`
+	CreatedAt                   string `json:"created_at"`
+	ExpiresAt                   string `json:"expires_at"`
+	State                       string `json:"state"`
+	DeliveredSessionID          string `json:"delivered_session_id,omitempty"`
+	DeliveredAt                 string `json:"delivered_at,omitempty"`
+	Reason                      string `json:"reason,omitempty"`
 }
 
 // MessageEvent is one delivery-state transition in an inbox message history.
@@ -116,6 +152,8 @@ func Sample(route Route) any {
 			Capabilities:    []string{"repo_status", "canonical_worktree_status"},
 			Roles:           []string{"worker"},
 			AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+			Handle:          "architect",
+			Repository:      "neurorouter-pro",
 			DeliveryMode:    "queued_delivery",
 			SessionStatus:   "online",
 			LeaseExpiresAt:  "2026-01-01T00:02:00Z",
@@ -130,6 +168,26 @@ func Sample(route Route) any {
 			Body:                "what work order are you on?",
 			TTLSeconds:          600,
 		}
+	case RouteMessageSendHandle:
+		// The stale hint (nr-participant-1) was overridden; the message routes to
+		// the resolved live participant (nr-participant-2). WO-174 ghost-kill.
+		return SentByHandleMessage{
+			MessageID:                   "hbm-2",
+			SenderSessionID:             "nr-session-1",
+			SenderParticipantID:         "nr-participant-1",
+			TargetParticipantID:         "nr-participant-2",
+			TargetHandle:                "architect",
+			TargetRepository:            "neurorouter-pro",
+			ResolvedTargetParticipantID: "nr-participant-2",
+			ResolvedTargetSessionID:     "nr-session-2",
+			ResolutionMode:              "server_side_handle",
+			IgnoredTargetParticipantID:  "nr-participant-1",
+			Body:                        "which work order are you on?",
+			CreatedAt:                   "2026-01-01T00:00:30Z",
+			ExpiresAt:                   "2026-01-01T00:10:30Z",
+			State:                       "queued",
+			DeliveredAt:                 "0001-01-01T00:00:00Z",
+		}
 	case RouteMessageDeliver:
 		return DeliverMessageRequest{SessionID: "nr-session-2"}
 	case RouteInbox:
@@ -139,17 +197,23 @@ func Sample(route Route) any {
 			Messages: []MessageEntry{
 				{
 					Message: AgentMessage{
-						MessageID:             "hbm-1",
-						SenderSessionID:       "nr-session-2",
-						SenderParticipantID:   "nr-participant-2",
-						TargetParticipantID:   "nr-participant-1",
-						TargetAgentID:         "claude/hivebus",
-						TargetAnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
-						Body:                  "what work order are you on?",
-						CreatedAt:             "2026-01-01T00:00:30Z",
-						ExpiresAt:             "2026-01-01T00:10:30Z",
-						State:                 "queued",
-						DeliveredAt:           "0001-01-01T00:00:00Z",
+						MessageID:                   "hbm-1",
+						SenderSessionID:             "nr-session-2",
+						SenderParticipantID:         "nr-participant-2",
+						TargetParticipantID:         "nr-participant-1",
+						TargetAgentID:               "claude/hivebus",
+						TargetAnswerPublicKey:       "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+						TargetHandle:                "architect",
+						TargetRepository:            "neurorouter-pro",
+						ResolvedTargetParticipantID: "nr-participant-1",
+						ResolvedTargetSessionID:     "nr-session-1",
+						ResolutionMode:              "server_side_handle",
+						IgnoredTargetParticipantID:  "nr-participant-2",
+						Body:                        "what work order are you on?",
+						CreatedAt:                   "2026-01-01T00:00:30Z",
+						ExpiresAt:                   "2026-01-01T00:10:30Z",
+						State:                       "queued",
+						DeliveredAt:                 "0001-01-01T00:00:00Z",
 					},
 					Events: []MessageEvent{
 						{
@@ -179,6 +243,8 @@ func sampleAgentSession() AgentSession {
 		Capabilities:    []string{"repo_status", "canonical_worktree_status"},
 		Roles:           []string{"worker"},
 		AnswerPublicKey: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+		Handle:          "architect",
+		Repository:      "neurorouter-pro",
 		DeliveryMode:    "queued_delivery",
 		SessionStatus:   "online",
 		LeaseExpiresAt:  "2026-01-01T00:02:00Z",

@@ -17,13 +17,19 @@
         "created_at": "2026-01-01T00:00:30Z",
         "delivered_at": "0001-01-01T00:00:00Z",
         "expires_at": "2026-01-01T00:10:30Z",
+        "ignored_target_participant_id": "nr-participant-2",
         "message_id": "hbm-1",
+        "resolution_mode": "server_side_handle",
+        "resolved_target_participant_id": "nr-participant-1",
+        "resolved_target_session_id": "nr-session-1",
         "sender_participant_id": "nr-participant-2",
         "sender_session_id": "nr-session-2",
         "state": "queued",
         "target_agent_id": "claude/hivebus",
         "target_answer_public_key": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
-        "target_participant_id": "nr-participant-1"
+        "target_handle": "architect",
+        "target_participant_id": "nr-participant-1",
+        "target_repository": "neurorouter-pro"
       }
     }
   ],
@@ -35,6 +41,7 @@
       "canonical_worktree_status"
     ],
     "delivery_mode": "queued_delivery",
+    "handle": "architect",
     "host_alias": "host-a",
     "installation_id": "install-1",
     "last_seen_at": "2026-01-01T00:01:00Z",
@@ -44,6 +51,7 @@
     "roles": [
       "worker"
     ],
+    "repository": "neurorouter-pro",
     "session_id": "nr-session-1",
     "session_status": "online"
   },

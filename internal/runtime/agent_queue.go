@@ -22,6 +22,8 @@ type sendAgentMessageRequest struct {
 	SenderSessionID     string `json:"sender_session_id"`
 	SenderParticipantID string `json:"sender_participant_id"`
 	TargetParticipantID string `json:"target_participant_id"`
+	TargetHandle        string `json:"target_handle,omitempty"` // WO-174: preferred stable route key; resolved server-side.
+	Repository          string `json:"repository,omitempty"`    // WO-174: optional scope for role handles.
 	ChannelID           string `json:"channel_id,omitempty"`
 	Body                string `json:"body"`
 	TTLSeconds          int    `json:"ttl_seconds,omitempty"`
@@ -118,15 +120,50 @@ func (s *server) handleSendAgentMessage(w http.ResponseWriter, r *http.Request) 
 		ttl = time.Duration(request.TTLSeconds) * time.Second
 	}
 
-	record, err := s.store.QueueAgentMessage(r.Context(), store.AgentMessageInput{
+	now := s.currentTime()
+	targetHandle := strings.TrimSpace(request.TargetHandle)
+	targetRepository := strings.TrimSpace(request.Repository)
+	targetParticipantID := request.TargetParticipantID
+	var resolution *store.ResolvedTargetHandle
+	// WO-174: resolve a stable handle to the freshest-live participant only on a
+	// DIRECTED send (no channel_id). A channel/broadcast send never rebinds its
+	// route by handle — a stray target_handle there is metadata, not routing
+	// authority (mirrors the NR directed-only boundary; OSS has no ask channel).
+	if targetHandle != "" && strings.TrimSpace(request.ChannelID) == "" {
+		resolved, err := s.store.ResolveTargetHandle(
+			r.Context(), targetHandle, targetRepository, now,
+		)
+		if err != nil {
+			writeTargetHandleError(w, err)
+			return
+		}
+		targetParticipantID = resolved.ParticipantID
+		resolution = &resolved
+	}
+
+	input := store.AgentMessageInput{
 		MessageID:           request.MessageID,
 		SenderSessionID:     request.SenderSessionID,
 		SenderParticipantID: request.SenderParticipantID,
-		TargetParticipantID: request.TargetParticipantID,
+		TargetParticipantID: targetParticipantID,
 		ChannelID:           request.ChannelID,
 		Body:                request.Body,
 		TTL:                 ttl,
-	}, s.currentTime())
+	}
+	if resolution != nil {
+		// WO-175: persist resolution provenance with the queued message, not only
+		// on the immediate HTTP response.
+		input.TargetHandle = targetHandle
+		input.Repository = targetRepository
+		input.ResolvedTargetParticipantID = resolution.ParticipantID
+		input.ResolvedTargetSessionID = resolution.SessionID
+		input.ResolutionMode = store.ResolutionModeServerSideHandle
+		if ignored := strings.TrimSpace(request.TargetParticipantID); ignored != "" && ignored != resolution.ParticipantID {
+			input.IgnoredTargetParticipantID = ignored
+		}
+	}
+
+	record, err := s.store.QueueAgentMessage(r.Context(), input, now)
 	switch {
 	case errors.Is(err, store.ErrChannelNotFound):
 		writeError(w, http.StatusNotFound, err)
@@ -141,6 +178,20 @@ func (s *server) handleSendAgentMessage(w http.ResponseWriter, r *http.Request) 
 			Message: record.Message,
 			Receipt: receipt,
 		})
+	}
+}
+
+// writeTargetHandleError maps a WO-174 resolution failure to its wire code.
+func writeTargetHandleError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrTargetHandleNotFound):
+		writeError(w, http.StatusNotFound, err)
+	case errors.Is(err, store.ErrTargetHandleNotLive):
+		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, store.ErrTargetHandleAmbiguous):
+		writeError(w, http.StatusConflict, err)
+	default:
+		writeError(w, http.StatusInternalServerError, err)
 	}
 }
 

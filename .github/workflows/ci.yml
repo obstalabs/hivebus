@@ -94,17 +94,27 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OWNER_AUTHOR: "obstalabs <265053889+obstalabs@users.noreply.github.com>"
+          TRUSTED_OWNER_PR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'obstalabs' }}
         run: |
+          # WO-160: external contributors must provide a genuine DCO trailer.
+          # WO-180: author name/email alone is user-controlled, so the owner
+          # exemption only applies to same-repository PRs opened by the owner.
+          # Agents must not rewrite commits to manufacture legal certification.
           missing=0
           for sha in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
             author="$(git show -s --format='%an <%ae>' "$sha")"
+            if [ "${TRUSTED_OWNER_PR:-false}" = "true" ] && [ "$author" = "$OWNER_AUTHOR" ]; then
+              echo "Owner-authored commit $sha by $author accepted under trusted same-repository DCO policy."
+              continue
+            fi
             if ! git show -s --format='%B' "$sha" | grep -qiE "^Signed-off-by: .+ <.+@.+>"; then
               echo "::error::commit $sha by $author is missing a Signed-off-by trailer (use git commit -s)"
               missing=1
             fi
           done
           if [ "$missing" -ne 0 ]; then
-            echo "DCO check failed: every PR commit must be signed off (https://developercertificate.org)."
+            echo "DCO check failed: every non-owner PR commit must be signed off (https://developercertificate.org)."
             exit 1
           fi
-          echo "All PR commits carry a Signed-off-by trailer."
+          echo "All PR commits either carry a Signed-off-by trailer or match the owner-authored repository policy."
